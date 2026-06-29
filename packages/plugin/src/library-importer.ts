@@ -8,7 +8,7 @@
  * access (rare — typically only happens when a library has been deleted).
  */
 
-import { LIBRARY_TEXT_STYLES, LIBRARY_PAINT_STYLES } from './library-manifest';
+import { LIBRARY_TEXT_STYLES, LIBRARY_PAINT_STYLES, LIBRARY_COLOUR_VARIABLES } from './library-manifest';
 
 export type LibraryImportReport = {
   attempted: number;
@@ -17,29 +17,49 @@ export type LibraryImportReport = {
 };
 
 export async function ensureLibraryStylesImported(): Promise<LibraryImportReport> {
-  const allEntries = [...LIBRARY_TEXT_STYLES, ...LIBRARY_PAINT_STYLES];
-  if (allEntries.length === 0) return { attempted: 0, imported: 0, failed: 0 };
+  const styleEntries = [...LIBRARY_TEXT_STYLES, ...LIBRARY_PAINT_STYLES];
+  const variableEntries = [...LIBRARY_COLOUR_VARIABLES];
+  if (styleEntries.length === 0 && variableEntries.length === 0) {
+    return { attempted: 0, imported: 0, failed: 0 };
+  }
 
   let imported = 0;
   let failed = 0;
-
-  // Run in parallel but cap concurrency so the Figma plugin sandbox stays
-  // responsive. importStyleByKeyAsync is cheap when the style is already
-  // present locally.
   const CONCURRENCY = 8;
-  let index = 0;
-  async function worker(): Promise<void> {
-    while (index < allEntries.length) {
-      const entry = allEntries[index++];
-      try {
-        await figma.importStyleByKeyAsync(entry.key);
-        imported++;
-      } catch {
-        failed++;
+
+  // Styles
+  {
+    let i = 0;
+    async function worker(): Promise<void> {
+      while (i < styleEntries.length) {
+        const entry = styleEntries[i++];
+        try {
+          await figma.importStyleByKeyAsync(entry.key);
+          imported++;
+        } catch {
+          failed++;
+        }
       }
     }
+    await Promise.all(Array.from({ length: CONCURRENCY }, worker));
   }
-  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 
-  return { attempted: allEntries.length, imported, failed };
+  // Variables (when library publishes them via REST — Enterprise plan)
+  {
+    let i = 0;
+    async function worker(): Promise<void> {
+      while (i < variableEntries.length) {
+        const entry = variableEntries[i++];
+        try {
+          await figma.variables.importVariableByKeyAsync(entry.key);
+          imported++;
+        } catch {
+          failed++;
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+  }
+
+  return { attempted: styleEntries.length + variableEntries.length, imported, failed };
 }

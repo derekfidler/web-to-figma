@@ -278,3 +278,5 @@ export const LIBRARY_TEXT_STYLES: LibraryStyleEntry[] = [
 ];
 
 export const LIBRARY_PAINT_STYLES: LibraryStyleEntry[] = [];
+
+export const LIBRARY_COLOUR_VARIABLES: LibraryStyleEntry[] = [];

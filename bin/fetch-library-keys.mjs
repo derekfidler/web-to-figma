@@ -40,18 +40,41 @@ async function listStyles(fileKey) {
   return body.meta?.styles ?? [];
 }
 
+/** Returns array of { key, name, resolvedType } for variables published in
+ *  the given library file. Requires Enterprise plan; returns [] on 403/404. */
+async function listPublishedVariables(fileKey) {
+  const resp = await fetch(`https://api.figma.com/v1/files/${fileKey}/variables/published`, {
+    headers: { 'X-Figma-Token': TOKEN },
+  });
+  if (resp.status === 403 || resp.status === 404) {
+    return { variables: [], note: `variables endpoint returned ${resp.status} (Enterprise plan required, or file has no published variables)` };
+  }
+  if (!resp.ok) {
+    return { variables: [], note: `variables endpoint returned ${resp.status}: ${(await resp.text()).slice(0, 200)}` };
+  }
+  const body = await resp.json();
+  const variables = Object.values(body.meta?.variables ?? {}).map((v) => ({
+    key: v.subscribed_id ?? v.key,
+    name: v.name,
+    resolvedType: v.resolvedType,
+  }));
+  return { variables, note: null };
+}
+
 async function main() {
   const textStyles = [];
   const paintStyles = [];
+  const colourVariables = [];
 
   for (const file of FILES) {
-    console.log(`Fetching styles from ${file.name} (${file.key})...`);
+    console.log(`Fetching from ${file.name} (${file.key})...`);
+    // Styles (text + fill)
     let styles;
     try {
       styles = await listStyles(file.key);
     } catch (err) {
-      console.error(`  failed: ${err.message}`);
-      continue;
+      console.error(`  styles failed: ${err.message}`);
+      styles = [];
     }
     let textCount = 0;
     let paintCount = 0;
@@ -66,6 +89,19 @@ async function main() {
       }
     }
     console.log(`  ${textCount} text styles, ${paintCount} paint styles`);
+
+    // Published variables (Enterprise plan)
+    const { variables, note } = await listPublishedVariables(file.key);
+    if (note) {
+      console.log(`  ${note}`);
+    }
+    let colourCount = 0;
+    for (const v of variables) {
+      if (v.resolvedType !== 'COLOR') continue;
+      colourVariables.push({ key: v.key, name: v.name, source: file.name });
+      colourCount++;
+    }
+    if (colourCount > 0) console.log(`  ${colourCount} colour variables`);
   }
 
   const out = `/**
@@ -77,11 +113,15 @@ export type LibraryStyleEntry = { key: string; name: string; source: string };
 export const LIBRARY_TEXT_STYLES: LibraryStyleEntry[] = ${JSON.stringify(textStyles, null, 2)};
 
 export const LIBRARY_PAINT_STYLES: LibraryStyleEntry[] = ${JSON.stringify(paintStyles, null, 2)};
+
+export const LIBRARY_COLOUR_VARIABLES: LibraryStyleEntry[] = ${JSON.stringify(colourVariables, null, 2)};
 `;
 
   const path = resolve(__dirname, '..', 'packages/plugin/src/library-manifest.ts');
   await writeFile(path, out);
-  console.log(`\n✓ Wrote ${textStyles.length} text + ${paintStyles.length} paint style keys → ${path}`);
+  console.log(
+    `\n✓ Wrote ${textStyles.length} text + ${paintStyles.length} paint style keys + ${colourVariables.length} colour variables → ${path}`,
+  );
 }
 
 main().catch((err) => {
