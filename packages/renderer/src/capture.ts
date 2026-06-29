@@ -11,6 +11,7 @@
  */
 
 import type { Browser } from 'playwright';
+import sharp from 'sharp';
 import type {
   CaptureMeta,
   CaptureResponse,
@@ -23,6 +24,10 @@ import { VIEWPORT_PRESETS } from '@web-to-figma/shared';
 import { buildExtractorCall, type IntermediateNode } from './extractor/extractor.js';
 
 const SCREENSHOT_ATTR = 'data-w2f-id';
+
+/** A generic "image placeholder" glyph — appears when a screenshot or remote
+ *  image fetch failed. Designers can replace it after import. */
+const PLACEHOLDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>`;
 
 export type CaptureOptions = {
   url: string;
@@ -63,6 +68,25 @@ export async function capture(browser: Browser, opts: CaptureOptions): Promise<C
       await page.waitForSelector(opts.waitForSelector, { timeout: 10_000 });
     }
     await page.waitForTimeout(opts.settleMs ?? 1_500);
+
+    // Scroll-warmup. Many modern apps lazy-load images and SVG icons below
+    // the viewport (Next.js <Image>, react-intersection-observer, etc.). If
+    // we extract at scroll=0, those elements exist as empty placeholders and
+    // their bounds get captured but their contents don't. Walk down the page
+    // in chunks to trigger every IntersectionObserver, then back to the top.
+    await page.evaluate(async () => {
+      const stepHeight = window.innerHeight * 0.8;
+      const totalHeight = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
+      for (let y = 0; y < totalHeight; y += stepHeight) {
+        window.scrollTo(0, y);
+        // One animation frame per step is enough to fire IntersectionObserver
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null))));
+      }
+      window.scrollTo(0, 0);
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    // Now wait for any newly-started image loads to settle.
+    await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
 
     // Hide dev-mode overlays so they don't (a) appear in extracted layers or
     // (b) bleed into element screenshots. nextjs-portal renders the Next.js
@@ -116,11 +140,12 @@ export async function capture(browser: Browser, opts: CaptureOptions): Promise<C
     }
     const fontAliases = (extractResult as { fontAliases?: Record<string, string> }).fontAliases ?? {};
 
-    // Post-process: screenshots + image fetches
+    // Post-process: take ONE full-page screenshot, crop each clip from it,
+    // and fetch remote <img> assets in parallel.
     const screenshotCache = new Map<string, { base64: string; mimeType: string }>();
     const imageCache = new Map<string, { base64: string; mimeType: string }>();
 
-    await collectScreenshots(extractResult.tree, page, screenshotCache);
+    await collectScreenshots(extractResult.tree, page, screenshotCache, viewport.deviceScaleFactor ?? 1);
     await collectImages(extractResult.tree, page, imageCache);
 
     const root = finalise(extractResult.tree, { screenshotCache, imageCache });
@@ -144,36 +169,69 @@ export async function capture(browser: Browser, opts: CaptureOptions): Promise<C
 // ---- post-processing ---------------------------------------------------------
 
 async function collectScreenshots(
-  node: IntermediateNode | null,
+  root: IntermediateNode | null,
   page: import('playwright').Page,
   cache: Map<string, { base64: string; mimeType: string }>,
+  deviceScaleFactor: number,
 ): Promise<void> {
+  if (!root) return;
+
+  // Walk the tree first to find every clip we need
+  const clips: { selector: string; clip: { x: number; y: number; width: number; height: number } }[] = [];
+  collectClips(root, clips);
+  if (clips.length === 0) return;
+
+  // Take ONE full-page screenshot. Cropping every clip from this buffer with
+  // Sharp is dramatically faster than per-element screenshots, and full-page
+  // captures clips that are below the visible viewport (Telia DK at y=940
+  // when viewport is 900 tall — those used to come back empty).
+  let pagePng: Buffer;
+  try {
+    pagePng = await page.screenshot({
+      fullPage: true,
+      type: 'png',
+      animations: 'disabled',
+      caret: 'hide',
+      timeout: 30_000,
+    });
+  } catch (err) {
+    console.warn(`[capture] full-page screenshot failed:`, (err as Error).message);
+    return;
+  }
+
+  // The screenshot is at deviceScaleFactor density. Clips are in CSS pixels.
+  const dsf = deviceScaleFactor;
+  await Promise.all(
+    clips.map(async ({ selector, clip }) => {
+      if (cache.has(selector)) return;
+      const left = Math.max(0, Math.round(clip.x * dsf));
+      const top = Math.max(0, Math.round(clip.y * dsf));
+      const width = Math.max(1, Math.round(clip.width * dsf));
+      const height = Math.max(1, Math.round(clip.height * dsf));
+      try {
+        const cropped = await sharp(pagePng).extract({ left, top, width, height }).png().toBuffer();
+        cache.set(selector, { base64: cropped.toString('base64'), mimeType: 'image/png' });
+      } catch (err) {
+        console.warn(`[capture] crop failed for clip ${selector}:`, (err as Error).message);
+      }
+    }),
+  );
+}
+
+function collectClips(
+  node: IntermediateNode | null,
+  out: { selector: string; clip: { x: number; y: number; width: number; height: number } }[],
+): void {
   if (!node) return;
   if (node.__needsScreenshot && node.__selector) {
-    if (!cache.has(node.__selector)) {
-      try {
-        const clip = JSON.parse(node.__selector) as { x: number; y: number; width: number; height: number };
-        if (clip.width > 0 && clip.height > 0) {
-          const buffer = await page.screenshot({
-            omitBackground: true,
-            type: 'png',
-            animations: 'disabled',
-            caret: 'hide',
-            clip,
-            timeout: 3_000,
-          });
-          cache.set(node.__selector, { base64: buffer.toString('base64'), mimeType: 'image/png' });
-        }
-      } catch (err) {
-        console.warn(`[capture] screenshot failed for clip ${node.__selector}:`, (err as Error).message);
-      }
+    try {
+      const clip = JSON.parse(node.__selector) as { x: number; y: number; width: number; height: number };
+      if (clip.width > 0 && clip.height > 0) out.push({ selector: node.__selector, clip });
+    } catch {
+      /* malformed selector */
     }
   }
-  if (node.children) {
-    for (const child of node.children) {
-      await collectScreenshots(child, page, cache);
-    }
-  }
+  if (node.children) for (const c of node.children) collectClips(c, out);
 }
 
 async function collectImages(
@@ -272,13 +330,15 @@ function finalise(node: IntermediateNode, ctx: FinaliseCtx): SceneNode {
       };
       return img;
     }
-    // Fallback to a placeholder rect so layout still makes sense
+    // Fallback when screenshot/fetch failed: emit a VECTOR with a generic
+    // image-placeholder glyph instead of a featureless gray box. Designers
+    // can swap in real assets after the fact, and it's clear which slots
+    // didn't capture cleanly.
     return {
       ...common,
-      type: 'RECT',
-      fills: [{ type: 'SOLID', color: { r: 0.9, g: 0.9, b: 0.9, a: 1 } }],
-      cornerRadius: node.cornerRadius,
-    };
+      type: 'VECTOR',
+      svg: PLACEHOLDER_SVG,
+    } as SceneNode;
   }
 
   if (node.__kind === 'text') {
