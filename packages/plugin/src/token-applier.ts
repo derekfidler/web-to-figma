@@ -230,33 +230,39 @@ function resolveDefaultColour(v: Variable): { r: number; g: number; b: number } 
 
 type ColourContext = 'text' | 'background' | 'border';
 
-/** Find the closest colour token within a small perceptual distance.
- *  Within candidates close enough by RGB, prefer tokens whose NAME suggests
- *  they're meant for the slot we're filling (text → "text/", "foreground/";
- *  background → "surface/", "bg/"; etc.) and demote per-component shadow,
- *  effect, or otherwise specialised tokens. */
+/** Find the closest colour token, balancing colour distance against name
+ *  context. CSS-rendered colours often differ slightly from the design
+ *  system's canonical value (e.g. body text `color: black` (#000) vs
+ *  color/text/primary (#1A1A1A)). A strict colour threshold misses these,
+ *  so we keep two windows: a tight one that always qualifies and a wider
+ *  one reserved for strongly context-matching names. */
 function findClosestColour(
   target: { r: number; g: number; b: number },
   pool: ColourToken[],
   context: ColourContext,
 ): ColourToken | null {
-  // Stage 1: collect everything within the RGB threshold
-  const RGB_THRESHOLD = 6; // ~6/255 Euclidean — absorbs 1-2 bit rounding
-  const candidates: { token: ColourToken; dist: number }[] = [];
+  const TIGHT_DIST = 8; // any name qualifies within this radius
+  const WIDE_DIST = 70; // ~near-black-vs-pure-black gap
+  const STRONG_CONTEXT = 4; // a single positive keyword (+4) earns the wider window
+
+  const candidates: { token: ColourToken; dist: number; ctx: number }[] = [];
   for (const t of pool) {
     const dr = (t.rgb.r - target.r) * 255;
     const dg = (t.rgb.g - target.g) * 255;
     const db = (t.rgb.b - target.b) * 255;
     const dist = Math.sqrt(dr * dr + dg * dg + db * db);
-    if (dist <= RGB_THRESHOLD) candidates.push({ token: t, dist });
+    const ctx = contextScore(t, context);
+    const eligible = dist <= TIGHT_DIST || (dist <= WIDE_DIST && ctx >= STRONG_CONTEXT);
+    if (eligible) candidates.push({ token: t, dist, ctx });
   }
   if (candidates.length === 0) return null;
-  if (candidates.length === 1) return candidates[0].token;
 
-  // Stage 2: score by (context fit) - (distance), highest wins.
+  // Score: context dominates, distance modulates. Negative context can
+  // out-weigh closeness so shadow/effect tokens lose to text/foreground tokens
+  // even when the shadow is RGB-perfect.
   candidates.sort((a, b) => {
-    const sa = contextScore(a.token, context) - a.dist;
-    const sb = contextScore(b.token, context) - b.dist;
+    const sa = a.ctx * 3 - a.dist * 0.15;
+    const sb = b.ctx * 3 - b.dist * 0.15;
     return sb - sa;
   });
   return candidates[0].token;
