@@ -21,6 +21,25 @@ import type {
 // Fallback font used whenever the original isn't available in Figma.
 const FALLBACK_FONT: FontName = { family: 'Inter', style: 'Regular' };
 
+/**
+ * Brand-font overrides. Maps captured CSS-alias families to the exact font
+ * family name installed on the design team's machines.
+ *
+ * These take priority over auto-detected @font-face aliases and fuzzy matching.
+ * Add or adjust entries here when a new brand font joins the design system or
+ * Figma reports a different family name than expected.
+ *
+ * Resolution still falls back to fuzzy matching if the override family isn't
+ * installed exactly — so "Founders Grotesk X-Condensed" still works if it's
+ * shipped as "Founders Grotesk X-Cond" on a teammate's machine.
+ */
+const FONT_OVERRIDES: Record<string, string> = {
+  // Flatpay design system
+  founders: 'Founders Grotesk X-Condensed',
+  interTight: 'Inter Tight',
+  martianMono: 'Martian Mono',
+};
+
 type FontKey = string; // family|style
 
 type FontResolution = {
@@ -147,12 +166,17 @@ async function preloadFonts(
   await Promise.all(
     [...keys].map(async (k) => {
       const info = meta.get(k)!;
-      // Renderer-extracted @font-face alias takes priority over fuzzy matching.
+      // Resolution priority:
+      //   1. Hardcoded brand-font override (FONT_OVERRIDES)
+      //   2. Renderer-extracted @font-face alias from the page CSS
+      //   3. Original captured family name (fuzzy match handles variations)
+      const override = FONT_OVERRIDES[info.family];
       const aliased = fontAliases[info.family];
-      const family = aliased ?? info.family;
+      const family = override ?? aliased ?? info.family;
       const resolved = await resolveFont(family, info.weight, stylesByFamily);
-      // If the alias matched something, the user shouldn't see it as a fallback.
-      if (aliased && resolved.font.family.toLowerCase().includes(aliased.toLowerCase().split(' ')[0])) {
+      // If we used an override or alias, treat a partial-name match as "found".
+      const hint = (override ?? aliased ?? '').toLowerCase().split(' ')[0];
+      if (hint && resolved.font.family.toLowerCase().includes(hint)) {
         resolved.fellBack = false;
       }
       result.set(k, resolved);
