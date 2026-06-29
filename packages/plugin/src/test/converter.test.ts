@@ -32,14 +32,18 @@ describe('converter', () => {
     figmaStub.reset();
     const capture = JSON.parse(readFileSync(path, 'utf8')) as CaptureResponse;
     const messages: string[] = [];
-    const root = await buildScene(capture, { onProgress: (m) => messages.push(m) });
-    expect(root).toBeTruthy();
-    expect(root.type).toBe('FRAME');
+    const result = await buildScene(capture, { onProgress: (m) => messages.push(m) });
+    expect(result.root).toBeTruthy();
+    expect(result.root.type).toBe('FRAME');
     // The wrapper frame contains exactly one child (the page root frame)
-    expect(root.children.length).toBe(1);
+    expect(result.root.children.length).toBe(1);
     // Spot-check that a reasonable number of figma.* calls happened
     const calls = figmaStub.log.length;
     expect(calls).toBeGreaterThan(capture.meta.nodeCount / 2);
     console.log(`✓ ${capture.meta.nodeCount} captured nodes → ${calls} figma calls`);
+    console.log(`✓ ${result.fontResolutions.length} fonts resolved (${result.fontResolutions.filter((f) => f.fellBack).length} fell back)`);
+    for (const f of result.fontResolutions) {
+      console.log(`  ${f.fellBack ? '✗' : '✓'} ${f.requested.family} ${f.requested.weight} → ${f.resolved.family} / ${f.resolved.style}`);
+    }
   });
 });

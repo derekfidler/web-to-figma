@@ -29,10 +29,21 @@ type FontResolution = {
   fellBack: boolean;
 };
 
+export type BuildResult = {
+  root: FrameNode;
+  fontResolutions: FontResolutionReport[];
+};
+
+export type FontResolutionReport = {
+  requested: { family: string; weight: number };
+  resolved: FontName;
+  fellBack: boolean;
+};
+
 export async function buildScene(
   capture: CaptureResponse,
   options: { onProgress?: (msg: string) => void } = {},
-): Promise<FrameNode> {
+): Promise<BuildResult> {
   const progress = options.onProgress ?? (() => {});
 
   // 1. Pre-load every font we'll need. Falls back per-font on load failure.
@@ -57,7 +68,19 @@ export async function buildScene(
   rootFigmaNode.x = 0;
   rootFigmaNode.y = 0;
   wrapper.appendChild(rootFigmaNode);
-  return wrapper;
+
+  // Build report of font resolutions for diagnostic surfacing in the UI.
+  const meta = FONT_META_CACHE.get(fontMap);
+  const fontResolutions: FontResolutionReport[] = [];
+  for (const [key, res] of fontMap.entries()) {
+    const info = meta?.get(key);
+    fontResolutions.push({
+      requested: info ?? { family: key, weight: 400 },
+      resolved: res.font,
+      fellBack: res.fellBack,
+    });
+  }
+  return { root: wrapper, fontResolutions };
 }
 
 // --- font preloading ---------------------------------------------------------
@@ -94,6 +117,8 @@ function collectFontsNeeded(node: W2FNode, into: Set<FontKey>, map: Map<FontKey,
   }
   if (node.type === 'FRAME') for (const c of node.children) collectFontsNeeded(c, into, map);
 }
+
+const FONT_META_CACHE = new WeakMap<Map<FontKey, FontResolution>, Map<FontKey, { family: string; weight: number }>>();
 
 async function preloadFonts(
   root: W2FNode,
@@ -134,6 +159,7 @@ async function preloadFonts(
     }),
   );
 
+  FONT_META_CACHE.set(result, meta);
   return result;
 }
 
@@ -362,15 +388,13 @@ async function buildText(node: W2FText, ctx: BuildCtx): Promise<TextNode> {
   text.name = node.name;
   text.x = node.x;
   text.y = node.y;
-  // When we used a fallback font the captured width is no longer accurate —
-  // let the text node grow to its natural size so it doesn't clip ("Sen" /
-  // "Rec"). For original fonts the captured size is correct and we keep it.
-  if (resolution.fellBack) {
-    text.textAutoResize = 'WIDTH_AND_HEIGHT';
-  } else {
-    text.textAutoResize = 'NONE';
-    text.resizeWithoutConstraints(Math.max(1, node.width), Math.max(1, node.height));
-  }
+  // Always auto-resize to natural content size. Even when we load the
+  // "correct" family, variable-font axis settings on the source page (Inter
+  // Tight at wght=530 etc.) produce slightly different glyph widths than the
+  // discrete installed file. Keeping the captured width forces wrapping on
+  // short labels ("BP" → "B"/"P", "Send" → "Sen"/"d"). Letting text size
+  // itself is more visually faithful.
+  text.textAutoResize = 'WIDTH_AND_HEIGHT';
   if (node.opacity != null) text.opacity = node.opacity;
   if (node.lineHeightPx) text.lineHeight = { unit: 'PIXELS', value: node.lineHeightPx };
   if (node.letterSpacingPx) text.letterSpacing = { unit: 'PIXELS', value: node.letterSpacingPx };

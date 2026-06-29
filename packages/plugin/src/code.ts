@@ -11,9 +11,15 @@ type UIMessage =
   | { kind: 'capture'; payload: CaptureRequest & { endpoint: string; token?: string } }
   | { kind: 'request-settings' };
 
+type FontReport = {
+  requested: { family: string; weight: number };
+  resolved: { family: string; style: string };
+  fellBack: boolean;
+};
+
 type PluginMessage =
   | { kind: 'progress'; message: string }
-  | { kind: 'success'; nodeCount: number; renderMs: number; buildMs: number }
+  | { kind: 'success'; nodeCount: number; renderMs: number; buildMs: number; fontReport: FontReport[] }
   | { kind: 'error'; message: string }
   | { kind: 'settings'; endpoint: string; token?: string };
 
@@ -53,7 +59,7 @@ figma.ui.onmessage = async (msg: UIMessage) => {
       post({ kind: 'progress', message: `Received ${capture.meta.nodeCount} nodes — building...` });
 
       const buildStart = Date.now();
-      const root = await buildScene(capture, {
+      const { root, fontResolutions } = await buildScene(capture, {
         onProgress: (m) => post({ kind: 'progress', message: m }),
       });
       const buildMs = Date.now() - buildStart;
@@ -64,7 +70,13 @@ figma.ui.onmessage = async (msg: UIMessage) => {
       const host = hostMatch ? hostMatch[1] : capture.meta.url;
       figma.notify(`Imported ${capture.meta.nodeCount} layers from ${host}`);
 
-      post({ kind: 'success', nodeCount: capture.meta.nodeCount, renderMs: capture.meta.renderMs, buildMs });
+      post({
+        kind: 'success',
+        nodeCount: capture.meta.nodeCount,
+        renderMs: capture.meta.renderMs,
+        buildMs,
+        fontReport: fontResolutions,
+      });
     } catch (err) {
       const message = (err as Error).message;
       figma.notify(`Import failed: ${message}`, { error: true });
