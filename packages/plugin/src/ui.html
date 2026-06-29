@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #111111;
+    --muted: #666666;
+    --border: #e0e0e0;
+    --accent: #18a0fb;
+    --error: #d93025;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #2c2c2c; --fg: #ffffff; --muted: #9a9a9a; --border: #444; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); font-family: 'Inter', system-ui, sans-serif; font-size: 12px; }
+  body { padding: 16px; }
+  label { display: block; font-weight: 600; margin: 12px 0 4px; }
+  input, select { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; }
+  input:focus, select:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  button { width: 100%; padding: 10px; margin-top: 16px; background: var(--fg); color: var(--bg); border: 0; border-radius: 6px; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .settings { margin-top: 16px; padding: 12px; border: 1px solid var(--border); border-radius: 6px; }
+  .settings summary { cursor: pointer; font-weight: 600; color: var(--muted); }
+  .settings[open] summary { margin-bottom: 8px; }
+  .status { margin-top: 12px; padding: 10px 12px; border-radius: 6px; background: var(--border); font-size: 11px; min-height: 1em; }
+  .status.error { background: rgba(217, 48, 37, 0.1); color: var(--error); }
+  .status.success { background: rgba(24, 160, 251, 0.1); color: var(--accent); }
+</style>
+</head>
+<body>
+  <label for="url">URL</label>
+  <input id="url" type="text" placeholder="https://flatpay.com" autofocus />
+
+  <label for="viewport">Viewport</label>
+  <select id="viewport">
+    <option value="desktop" selected>Desktop (1440 × 900)</option>
+    <option value="tablet">Tablet (768 × 1024)</option>
+    <option value="mobile">Mobile (375 × 812)</option>
+  </select>
+
+  <button id="capture">Capture page</button>
+
+  <details class="settings">
+    <summary>Renderer settings</summary>
+    <label for="endpoint">Endpoint</label>
+    <input id="endpoint" type="text" />
+    <label for="token">Token (optional)</label>
+    <input id="token" type="password" placeholder="Bearer token" />
+  </details>
+
+  <div id="status" class="status"></div>
+
+  <script>/* PLUGIN_UI_BUNDLE */</script>
+</body>
+</html>
