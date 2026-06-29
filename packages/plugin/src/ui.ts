@@ -65,17 +65,23 @@ window.addEventListener('message', (event) => {
       setStatus(msg.message as string);
       break;
     case 'success': {
-      const { nodeCount, renderMs, buildMs, fontReport } = msg as unknown as {
+      const { nodeCount, renderMs, buildMs, fontReport, tabularDiagnostic } = msg as unknown as {
         nodeCount: number;
         renderMs: number;
         buildMs: number;
         fontReport: Array<{ requested: { family: string; weight: number }; resolved: { family: string; style: string }; fellBack: boolean }>;
+        tabularDiagnostic: { tried: string[]; succeeded: string | null } | null;
       };
       const fellBackCount = fontReport.filter((f) => f.fellBack).length;
       const summary = fellBackCount > 0
         ? `${nodeCount} layers — ${fellBackCount}/${fontReport.length} fonts fell back`
         : `${nodeCount} layers — all ${fontReport.length} fonts matched`;
-      setStatus(`${summary} (${renderMs}ms render, ${buildMs}ms build)`, 'success');
+      const tabSummary = tabularDiagnostic
+        ? tabularDiagnostic.succeeded
+          ? `Tabular nums via ${tabularDiagnostic.succeeded}.`
+          : `Tabular nums unavailable — tried: ${tabularDiagnostic.tried.join(', ')}.`
+        : '';
+      setStatus(`${summary} (${renderMs}ms render, ${buildMs}ms build). ${tabSummary}`, 'success');
       // Show the per-font detail
       fontReportEl.innerHTML = fontReport
         .map((f) => {

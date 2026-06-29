@@ -51,6 +51,7 @@ type FontResolution = {
 export type BuildResult = {
   root: FrameNode;
   fontResolutions: FontResolutionReport[];
+  tabularDiagnostic: { tried: string[]; succeeded: string | null } | null;
 };
 
 export type FontResolutionReport = {
@@ -64,6 +65,7 @@ export async function buildScene(
   options: { onProgress?: (msg: string) => void } = {},
 ): Promise<BuildResult> {
   const progress = options.onProgress ?? (() => {});
+  resetTabularDiagnostic();
 
   // 1. Pre-load every font we'll need. Falls back per-font on load failure.
   progress('Loading fonts...');
@@ -99,7 +101,7 @@ export async function buildScene(
       fellBack: res.fellBack,
     });
   }
-  return { root: wrapper, fontResolutions };
+  return { root: wrapper, fontResolutions, tabularDiagnostic: getTabularDiagnostic() };
 }
 
 // --- font preloading ---------------------------------------------------------
@@ -433,24 +435,82 @@ async function buildText(node: W2FText, ctx: BuildCtx): Promise<TextNode> {
 
   // Tabular numbers for all Inter Tight text. Brand convention — keeps
   // amounts, counts, and timestamps optically aligned across rows.
-  // The Figma plugin typings flag openTypeFeatures as readonly, but the
-  // runtime exposes `setRangeOpenTypeFeatures` on TextNode in current Figma
-  // versions. We call it via an `unknown` cast and swallow any error so the
-  // import still succeeds on older runtimes that don't have the setter.
   if (/^inter\s*tight\b/i.test(resolution.font.family) && node.characters.length > 0) {
-    type FeatureSetter = {
-      setRangeOpenTypeFeatures?: (start: number, end: number, value: Record<string, boolean>) => void;
-    };
-    const setter = (text as unknown as FeatureSetter).setRangeOpenTypeFeatures;
-    if (typeof setter === 'function') {
-      try {
-        setter.call(text, 0, node.characters.length, { TNUM: true });
-      } catch {
-        // TNUM may not be supported on the loaded font face; safe to skip.
-      }
-    }
+    applyTabularNumbers(text);
   }
   return text;
+}
+
+/**
+ * Try every known way to turn on TNUM. Figma's plugin typings declare
+ * openTypeFeatures as readonly, but the runtime has gone through several
+ * APIs in different versions. We feature-detect and call whichever exists.
+ * Returns the path that succeeded, or null if none did.
+ */
+let tabularDiagnostic: { tried: string[]; succeeded: string | null } | null = null;
+
+function applyTabularNumbers(text: TextNode): void {
+  const len = text.characters.length;
+  const featureMap = { TNUM: true };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const t = text as any;
+  const tried: string[] = [];
+
+  const attempts: Array<{ name: string; run: () => boolean }> = [
+    {
+      name: 'setRangeOpenTypeFeatures',
+      run: () => {
+        if (typeof t.setRangeOpenTypeFeatures !== 'function') return false;
+        t.setRangeOpenTypeFeatures(0, len, featureMap);
+        return true;
+      },
+    },
+    {
+      name: 'setOpenTypeFeatures',
+      run: () => {
+        if (typeof t.setOpenTypeFeatures !== 'function') return false;
+        t.setOpenTypeFeatures(featureMap);
+        return true;
+      },
+    },
+    {
+      name: 'openTypeFeatures=',
+      run: () => {
+        t.openTypeFeatures = featureMap;
+        return t.openTypeFeatures?.TNUM === true;
+      },
+    },
+    {
+      name: 'setRangeOpenTypeFeature',
+      run: () => {
+        if (typeof t.setRangeOpenTypeFeature !== 'function') return false;
+        t.setRangeOpenTypeFeature(0, len, 'TNUM', true);
+        return true;
+      },
+    },
+  ];
+
+  for (const a of attempts) {
+    try {
+      tried.push(a.name);
+      if (a.run()) {
+        if (!tabularDiagnostic || tabularDiagnostic.succeeded === null) {
+          tabularDiagnostic = { tried, succeeded: a.name };
+        }
+        return;
+      }
+    } catch {/* try next */}
+  }
+  // Recorded only on the first failure so we can surface it once in the UI.
+  if (!tabularDiagnostic) tabularDiagnostic = { tried, succeeded: null };
+}
+
+export function getTabularDiagnostic(): { tried: string[]; succeeded: string | null } | null {
+  return tabularDiagnostic;
+}
+
+export function resetTabularDiagnostic(): void {
+  tabularDiagnostic = null;
 }
 
 function buildImage(node: W2FImage, ctx: BuildCtx): RectangleNode {

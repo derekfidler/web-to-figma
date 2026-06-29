@@ -27,7 +27,14 @@ type FontReport = {
 
 type PluginMessage =
   | { kind: 'progress'; message: string }
-  | { kind: 'success'; nodeCount: number; renderMs: number; buildMs: number; fontReport: FontReport[] }
+  | {
+      kind: 'success';
+      nodeCount: number;
+      renderMs: number;
+      buildMs: number;
+      fontReport: FontReport[];
+      tabularDiagnostic: { tried: string[]; succeeded: string | null } | null;
+    }
   | { kind: 'error'; message: string }
   | { kind: 'settings'; endpoint: string; token?: string };
 
@@ -59,6 +66,7 @@ figma.ui.onmessage = async (msg: UIMessage) => {
       let totalRenderMs = 0;
       let totalBuildMs = 0;
       const combinedFontReport: FontReport[] = [];
+      let firstTabularDiag: { tried: string[]; succeeded: string | null } | null = null;
 
       for (let i = 0; i < viewports.length; i++) {
         const viewport = viewports[i];
@@ -82,10 +90,11 @@ figma.ui.onmessage = async (msg: UIMessage) => {
         });
 
         const buildStart = Date.now();
-        const { root, fontResolutions } = await buildScene(capture, {
+        const { root, fontResolutions, tabularDiagnostic } = await buildScene(capture, {
           onProgress: (m) => post({ kind: 'progress', message: `[${i + 1}/${viewports.length}] ${m}` }),
         });
         const buildMs = Date.now() - buildStart;
+        if (!firstTabularDiag) firstTabularDiag = tabularDiagnostic;
 
         // Tag the wrapper with the viewport name so it's distinguishable in Figma
         root.name = `${root.name} — ${viewport}`;
@@ -113,6 +122,7 @@ figma.ui.onmessage = async (msg: UIMessage) => {
         renderMs: totalRenderMs,
         buildMs: totalBuildMs,
         fontReport: dedupeFontReport(combinedFontReport),
+        tabularDiagnostic: firstTabularDiag,
       });
     } catch (err) {
       const message = (err as Error).message;
