@@ -16,7 +16,18 @@
 
 
 export type TokenApplyReport = {
-  colors: { tried: number; matched: number; samples: string[] };
+  colors: {
+    tried: number;
+    matched: number;
+    samples: string[];
+    pool: {
+      localVariables: number;
+      localPaintStyles: number;
+      libraryCollections: number;
+      libraryVariables: number;
+      errors: string[];
+    };
+  };
   textStyles: { tried: number; matched: number; samples: string[] };
 };
 
@@ -35,8 +46,8 @@ type ColourToken =
   | { kind: 'paintStyle'; style: PaintStyle; name: string; rgb: { r: number; g: number; b: number } };
 
 async function applyColourTokens(root: SceneNode): Promise<TokenApplyReport['colors']> {
-  const pool = await collectAllColourTokens();
-  if (pool.length === 0) return { tried: 0, matched: 0, samples: [] };
+  const { pool, diagnostics } = await collectAllColourTokens();
+  if (pool.length === 0) return { tried: 0, matched: 0, samples: [], pool: diagnostics };
 
   let tried = 0;
   let matched = 0;
@@ -125,39 +136,57 @@ async function applyColourTokens(root: SceneNode): Promise<TokenApplyReport['col
   });
 
   await Promise.all(promises);
-  return { tried, matched, samples };
+  return { tried, matched, samples, pool: diagnostics };
 }
 
-async function collectAllColourTokens(): Promise<ColourToken[]> {
+async function collectAllColourTokens(): Promise<{
+  pool: ColourToken[];
+  diagnostics: TokenApplyReport['colors']['pool'];
+}> {
   const out: ColourToken[] = [];
+  const diagnostics: TokenApplyReport['colors']['pool'] = {
+    localVariables: 0,
+    localPaintStyles: 0,
+    libraryCollections: 0,
+    libraryVariables: 0,
+    errors: [],
+  };
 
   // Local colour variables
   try {
     const local = await figma.variables.getLocalVariablesAsync('COLOR');
+    diagnostics.localVariables = local.length;
     for (const v of local) {
       const rgb = resolveDefaultColour(v);
       if (rgb) out.push({ kind: 'variable', variable: v, name: v.name, rgb });
     }
-  } catch {/* skip */}
+  } catch (err) {
+    diagnostics.errors.push(`getLocalVariablesAsync: ${(err as Error).message}`);
+  }
 
   // Local paint (colour) styles
   try {
     const styles = await figma.getLocalPaintStylesAsync();
+    diagnostics.localPaintStyles = styles.length;
     for (const s of styles) {
       const solid = s.paints.find((p) => p.type === 'SOLID') as SolidPaint | undefined;
       if (!solid) continue;
       out.push({ kind: 'paintStyle', style: s, name: s.name, rgb: solid.color });
     }
-  } catch {/* skip */}
+  } catch (err) {
+    diagnostics.errors.push(`getLocalPaintStylesAsync: ${(err as Error).message}`);
+  }
 
   // Library colour variables (enabled team library collections only)
   try {
     const collections = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
+    diagnostics.libraryCollections = collections.length;
     for (const collection of collections) {
       let libVars: { key: string; name: string; resolvedType?: string }[] = [];
       try {
         libVars = (await figma.teamLibrary.getVariablesInLibraryCollectionAsync(collection.key)) as unknown as typeof libVars;
-      } catch {
+      } catch (err) {
+        diagnostics.errors.push(`getVariablesInLibraryCollectionAsync(${collection.name}): ${(err as Error).message}`);
         continue;
       }
       for (const libVar of libVars) {
@@ -165,16 +194,22 @@ async function collectAllColourTokens(): Promise<ColourToken[]> {
         try {
           const imported = await figma.variables.importVariableByKeyAsync(libVar.key);
           if (imported.resolvedType !== 'COLOR') continue;
+          diagnostics.libraryVariables++;
           const rgb = resolveDefaultColour(imported);
           if (rgb) out.push({ kind: 'variable', variable: imported, name: imported.name, rgb });
-        } catch {
-          /* not accessible */
+        } catch (err) {
+          // Per-variable import failure is expected for non-colour types; don't spam.
+          if (diagnostics.errors.length < 3) {
+            diagnostics.errors.push(`importVariableByKeyAsync(${libVar.name}): ${(err as Error).message}`);
+          }
         }
       }
     }
-  } catch {/* skip */}
+  } catch (err) {
+    diagnostics.errors.push(`getAvailableLibraryVariableCollectionsAsync: ${(err as Error).message}`);
+  }
 
-  return out;
+  return { pool: out, diagnostics };
 }
 
 function resolveDefaultColour(v: Variable): { r: number; g: number; b: number } | null {

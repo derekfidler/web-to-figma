@@ -71,7 +71,15 @@ window.addEventListener('message', (event) => {
         buildMs: number;
         fontReport: Array<{ requested: { family: string; weight: number }; resolved: { family: string; style: string }; fellBack: boolean }>;
         tabularDiagnostic: { tried: string[]; succeeded: string | null } | null;
-        tokenReport: { colors: { tried: number; matched: number; samples: string[] }; textStyles: { tried: number; matched: number; samples: string[] } } | null;
+        tokenReport: {
+          colors: {
+            tried: number;
+            matched: number;
+            samples: string[];
+            pool: { localVariables: number; localPaintStyles: number; libraryCollections: number; libraryVariables: number; errors: string[] };
+          };
+          textStyles: { tried: number; matched: number; samples: string[] };
+        } | null;
         libraryImport: { attempted: number; imported: number; failed: number } | null;
       };
       const fellBackCount = fontReport.filter((f) => f.fellBack).length;
@@ -84,10 +92,25 @@ window.addEventListener('message', (event) => {
       const tokSummary = tokenReport
         ? `Tokens: ${tokenReport.colors.matched}/${tokenReport.colors.tried} colours, ${tokenReport.textStyles.matched}/${tokenReport.textStyles.tried} text styles matched.`
         : '';
+      // If we found zero colour tokens at all, surface the diagnostic so we
+      // can tell whether the library is enabled, whether the API failed, etc.
+      const colourDiagText = tokenReport && tokenReport.colors.tried === 0
+        ? (() => {
+            const p = tokenReport.colors.pool;
+            const parts = [
+              `local vars: ${p.localVariables}`,
+              `local paint styles: ${p.localPaintStyles}`,
+              `library collections: ${p.libraryCollections}`,
+              `library vars imported: ${p.libraryVariables}`,
+            ];
+            if (p.errors.length) parts.push(`errors: ${p.errors.join(' | ')}`);
+            return `Colour pool empty — ${parts.join(', ')}.`;
+          })()
+        : '';
       const tabSummary = tabularDiagnostic && !tabularDiagnostic.succeeded
         ? `Tabular API unavailable — text styles with TNUM baked in are the only path.`
         : '';
-      setStatus(`${summary} (${renderMs}ms). ${libSummary} ${tokSummary} ${tabSummary}`.replace(/\s+/g, ' ').trim(), 'success');
+      setStatus(`${summary} (${renderMs}ms). ${libSummary} ${tokSummary} ${colourDiagText} ${tabSummary}`.replace(/\s+/g, ' ').trim(), 'success');
       // Show the per-font detail
       fontReportEl.innerHTML = fontReport
         .map((f) => {

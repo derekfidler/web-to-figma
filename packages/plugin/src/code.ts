@@ -72,7 +72,12 @@ figma.ui.onmessage = async (msg: UIMessage) => {
       const combinedFontReport: FontReport[] = [];
       let firstTabularDiag: { tried: string[]; succeeded: string | null } | null = null;
       const combinedTokenReport: TokenApplyReport = {
-        colors: { tried: 0, matched: 0, samples: [] },
+        colors: {
+          tried: 0,
+          matched: 0,
+          samples: [],
+          pool: { localVariables: 0, localPaintStyles: 0, libraryCollections: 0, libraryVariables: 0, errors: [] },
+        },
         textStyles: { tried: 0, matched: 0, samples: [] },
       };
 
@@ -130,6 +135,7 @@ figma.ui.onmessage = async (msg: UIMessage) => {
           const report = await applyLibraryTokens(root);
           combinedTokenReport.colors.tried += report.colors.tried;
           combinedTokenReport.colors.matched += report.colors.matched;
+          combinedTokenReport.colors.pool = report.colors.pool;
           for (const s of report.colors.samples) if (combinedTokenReport.colors.samples.length < 6) combinedTokenReport.colors.samples.push(s);
           combinedTokenReport.textStyles.tried += report.textStyles.tried;
           combinedTokenReport.textStyles.matched += report.textStyles.matched;
