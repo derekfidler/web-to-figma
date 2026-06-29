@@ -59,6 +59,9 @@ async function applyColourTokens(root: SceneNode): Promise<TokenApplyReport['col
   walkAll(root, (node) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const n = node as any;
+    // Fill context depends on the node — text-node fills are text colours,
+    // everything else is a background/surface fill.
+    const fillContext: ColourContext = node.type === 'TEXT' ? 'text' : 'background';
     // Fills (single-fill SOLID is the common case; we handle that path well.
     // For multi-fill nodes, fall back to per-paint variable binding.)
     if (Array.isArray(n.fills)) {
@@ -68,7 +71,7 @@ async function applyColourTokens(root: SceneNode): Promise<TokenApplyReport['col
       if (onlySolid) {
         const paint = fills[0] as SolidPaint;
         tried++;
-        const match = findClosestColour(paint.color, pool);
+        const match = findClosestColour(paint.color, pool, fillContext);
         if (match) {
           matched++;
           if (!sampleSet.has(match.name) && sampleSet.size < 6) {
@@ -101,7 +104,7 @@ async function applyColourTokens(root: SceneNode): Promise<TokenApplyReport['col
         const next = fills.map((paint) => {
           if (paint.type !== 'SOLID') return paint;
           tried++;
-          const match = findClosestColour(paint.color, pool);
+          const match = findClosestColour(paint.color, pool, fillContext);
           if (!match || match.kind !== 'variable') return paint;
           matched++;
           if (!sampleSet.has(match.name) && sampleSet.size < 6) {
@@ -121,7 +124,7 @@ async function applyColourTokens(root: SceneNode): Promise<TokenApplyReport['col
       const next = strokes.map((paint) => {
         if (paint.type !== 'SOLID') return paint;
         tried++;
-        const match = findClosestColour(paint.color, pool);
+        const match = findClosestColour(paint.color, pool, 'border');
         if (!match || match.kind !== 'variable') return paint;
         matched++;
         if (!sampleSet.has(match.name) && sampleSet.size < 6) {
@@ -225,28 +228,63 @@ function resolveDefaultColour(v: Variable): { r: number; g: number; b: number } 
   return null;
 }
 
+type ColourContext = 'text' | 'background' | 'border';
+
 /** Find the closest colour token within a small perceptual distance.
- *  Returns null if nothing is close enough. */
+ *  Within candidates close enough by RGB, prefer tokens whose NAME suggests
+ *  they're meant for the slot we're filling (text → "text/", "foreground/";
+ *  background → "surface/", "bg/"; etc.) and demote per-component shadow,
+ *  effect, or otherwise specialised tokens. */
 function findClosestColour(
   target: { r: number; g: number; b: number },
   pool: ColourToken[],
+  context: ColourContext,
 ): ColourToken | null {
-  let best: ColourToken | null = null;
-  let bestDist = Infinity;
+  // Stage 1: collect everything within the RGB threshold
+  const RGB_THRESHOLD = 6; // ~6/255 Euclidean — absorbs 1-2 bit rounding
+  const candidates: { token: ColourToken; dist: number }[] = [];
   for (const t of pool) {
     const dr = (t.rgb.r - target.r) * 255;
     const dg = (t.rgb.g - target.g) * 255;
     const db = (t.rgb.b - target.b) * 255;
     const dist = Math.sqrt(dr * dr + dg * dg + db * db);
-    if (dist < bestDist) {
-      bestDist = dist;
-      best = t;
-    }
+    if (dist <= RGB_THRESHOLD) candidates.push({ token: t, dist });
   }
-  // Threshold ~6 in RGB Euclidean. Tight enough to avoid mis-matches, loose
-  // enough to absorb 1-2 bit rounding from CSS computed values.
-  if (bestDist > 6) return null;
-  return best;
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0].token;
+
+  // Stage 2: score by (context fit) - (distance), highest wins.
+  candidates.sort((a, b) => {
+    const sa = contextScore(a.token, context) - a.dist;
+    const sb = contextScore(b.token, context) - b.dist;
+    return sb - sa;
+  });
+  return candidates[0].token;
+}
+
+function contextScore(token: ColourToken, context: ColourContext): number {
+  const name = token.name.toLowerCase();
+  let score = 0;
+  const positives: Record<ColourContext, string[]> = {
+    text: ['text', 'foreground', 'fg', 'label', 'heading', 'body', 'content'],
+    background: ['background', 'surface', 'bg', 'canvas', 'fill'],
+    border: ['border', 'stroke', 'outline', 'divider', 'separator', 'line'],
+  };
+  const negatives: Record<ColourContext, string[]> = {
+    text: ['background', 'surface', 'bg/', 'shadow', 'border', 'stroke', 'icon'],
+    background: ['text', 'foreground', 'shadow', 'icon', 'border'],
+    border: ['text', 'foreground', 'background', 'surface', 'shadow', 'icon'],
+  };
+  for (const p of positives[context]) if (name.includes(p)) score += 4;
+  for (const n of negatives[context]) if (name.includes(n)) score -= 4;
+  // Always demote shadow / effect / overlay tokens — they're rarely the
+  // right answer for a fill.
+  if (/(shadow|overlay|effect|elevation)/.test(name)) score -= 6;
+  // Prefer canonical semantic names ("color/text/primary"-style paths).
+  if (/(^|\/)color(\/|-)/.test(name) || name.startsWith('color-')) score += 2;
+  // Slight preference for shorter names (semantic vs component-prefixed).
+  score -= name.length / 100;
+  return score;
 }
 
 // ---- text style matching ----------------------------------------------------
