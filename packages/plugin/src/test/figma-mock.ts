@@ -80,6 +80,12 @@ const figma = {
     if (font.family.toLowerCase() === 'inter') return;
     throw new Error('font not available: ' + JSON.stringify(font));
   },
+  listAvailableFontsAsync: async () => [
+    { fontName: { family: 'Inter', style: 'Regular' } },
+    { fontName: { family: 'Inter', style: 'Medium' } },
+    { fontName: { family: 'Inter', style: 'Semi Bold' } },
+    { fontName: { family: 'Inter', style: 'Bold' } },
+  ],
   viewport: { scrollAndZoomIntoView: (_nodes: unknown[]) => undefined },
   notify: (_msg: string, _opts?: unknown) => undefined,
   clientStorage: {

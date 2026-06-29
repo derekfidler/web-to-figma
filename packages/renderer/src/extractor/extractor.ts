@@ -285,7 +285,9 @@ export const extractorSource = /* js */ `
     if (!ICON_FONT_REGEX.test(cs.fontFamily)) return false;
     // Must have visible text content (the glyph)
     const text = (el.textContent || '').trim();
-    return text.length > 0 && text.length < 20; // icon fonts use 1-2 char glyphs or ligatures like 'home'
+    // Material Symbols ligatures can be long: 'check_circle_outline' is 20,
+    // 'account_balance_wallet' is 22. Allow up to 64 to cover everything we've seen.
+    return text.length > 0 && text.length <= 64;
   }
 
   function isInlineSvg(el) {

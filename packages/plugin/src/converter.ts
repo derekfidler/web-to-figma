@@ -100,8 +100,16 @@ async function preloadFonts(root: W2FNode): Promise<Map<FontKey, FontResolution>
   const meta = new Map<FontKey, { family: string; weight: number }>();
   collectFontsNeeded(root, keys, meta);
 
+  // Snapshot what's actually available — locally installed fonts vary per machine.
+  const available = await figma.listAvailableFontsAsync();
+  const stylesByFamily = new Map<string, string[]>();
+  for (const f of available) {
+    const family = f.fontName.family;
+    if (!stylesByFamily.has(family)) stylesByFamily.set(family, []);
+    stylesByFamily.get(family)!.push(f.fontName.style);
+  }
+
   const result = new Map<FontKey, FontResolution>();
-  // Always have a fallback ready.
   try {
     await figma.loadFontAsync(FALLBACK_FONT);
   } catch {
@@ -111,25 +119,97 @@ async function preloadFonts(root: W2FNode): Promise<Map<FontKey, FontResolution>
   await Promise.all(
     [...keys].map(async (k) => {
       const info = meta.get(k)!;
-      const requested: FontName = { family: info.family, style: styleFromWeight(info.weight) };
-      try {
-        await figma.loadFontAsync(requested);
-        result.set(k, { font: requested, fellBack: false });
-        return;
-      } catch {
-        // continue to fallback
-      }
-      const interFallback: FontName = { family: 'Inter', style: styleFromWeight(info.weight) };
-      try {
-        await figma.loadFontAsync(interFallback);
-        result.set(k, { font: interFallback, fellBack: true });
-      } catch {
-        result.set(k, { font: FALLBACK_FONT, fellBack: true });
-      }
+      const resolved = await resolveFont(info.family, info.weight, stylesByFamily);
+      result.set(k, resolved);
     }),
   );
 
   return result;
+}
+
+/**
+ * Find the best font for a (family, weight) pair on the current machine.
+ *
+ * Strategy:
+ *   1. If the family is installed, pick the style whose weight is closest to
+ *      requested. (Handles "Founders Grotesk X-Condensed" only having Bold.)
+ *   2. If the family is missing, try common family-name variations (e.g.
+ *      "Founders Grotesk" matches when "Founders Grotesk Bold" was requested
+ *      with weight bundled into the family name).
+ *   3. Fall back to Inter at the requested weight.
+ */
+async function resolveFont(
+  requestedFamily: string,
+  requestedWeight: number,
+  stylesByFamily: Map<string, string[]>,
+): Promise<FontResolution> {
+  const candidates = familyCandidates(requestedFamily);
+  for (const family of candidates) {
+    const styles = stylesByFamily.get(family);
+    if (!styles || styles.length === 0) continue;
+    const style = pickClosestStyle(styles, requestedWeight);
+    try {
+      await figma.loadFontAsync({ family, style });
+      return { font: { family, style }, fellBack: family !== requestedFamily };
+    } catch {
+      // try next candidate
+    }
+  }
+  // Inter fallback
+  const interStyles = stylesByFamily.get('Inter') ?? ['Regular'];
+  const interStyle = pickClosestStyle(interStyles, requestedWeight);
+  try {
+    await figma.loadFontAsync({ family: 'Inter', style: interStyle });
+    return { font: { family: 'Inter', style: interStyle }, fellBack: true };
+  } catch {
+    return { font: FALLBACK_FONT, fellBack: true };
+  }
+}
+
+/** Generate candidate family names. "Founders Grotesk X-Cond" → also try
+ *  "Founders Grotesk X-Condensed", "Founders Grotesk", etc. */
+function familyCandidates(family: string): string[] {
+  const out = [family];
+  // Common CSS abbreviation expansions
+  const expanded = family
+    .replace(/X-Cond\b/i, 'X-Condensed')
+    .replace(/X-Condensed\b/i, 'X-Condensed');
+  if (expanded !== family) out.push(expanded);
+  // Trim trailing weight words to find the base family
+  const baseTrim = family.replace(/\s+(Thin|Light|Regular|Medium|Semi\s*Bold|Bold|Extra\s*Bold|Black)$/i, '');
+  if (baseTrim !== family) out.push(baseTrim);
+  return [...new Set(out)];
+}
+
+/** Score each available style against the requested weight, pick the closest. */
+function pickClosestStyle(styles: string[], requestedWeight: number): string {
+  const requestedScore = weightScore(styleFromWeight(requestedWeight));
+  let best = styles[0];
+  let bestDist = Infinity;
+  for (const s of styles) {
+    // Skip italics if we didn't ask for one
+    if (/italic|oblique/i.test(s)) continue;
+    const dist = Math.abs(weightScore(s) - requestedScore);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = s;
+    }
+  }
+  return best;
+}
+
+function weightScore(style: string): number {
+  const s = style.toLowerCase();
+  if (s.includes('thin')) return 100;
+  if (s.includes('extralight') || s.includes('ultralight')) return 200;
+  if (s.includes('light')) return 300;
+  if (s.includes('regular') || s === '' || s.includes('normal')) return 400;
+  if (s.includes('medium')) return 500;
+  if (s.includes('semibold') || s.includes('semi bold') || s.includes('demibold')) return 600;
+  if (s.includes('extrabold') || s.includes('extra bold') || s.includes('ultrabold')) return 800;
+  if (s.includes('bold')) return 700;
+  if (s.includes('black') || s.includes('heavy')) return 900;
+  return 400;
 }
 
 // --- image decoding ----------------------------------------------------------
@@ -211,7 +291,12 @@ function buildFrame(node: W2FFrame, ctx: BuildCtx): Promise<FrameNode> {
   // editing, and clipping inside small frames (buttons, sidebars) hides any
   // overflowing fallback-font text. Designers can re-enable per frame.
   frame.clipsContent = false;
-  if (node.layout && node.layout.mode !== 'NONE') applyLayout(frame, node.layout);
+  // Auto-layout disabled for v1. Source pages use justify-content magic
+  // (space-between, ml-auto) that Figma's auto-layout can't fully model, and
+  // a wrong auto-layout clusters children to one side and makes the result
+  // look broken. Absolute positioning gives 1:1 fidelity to the captured
+  // pixel positions.
+  // if (node.layout && node.layout.mode !== 'NONE') applyLayout(frame, node.layout);
   return (async () => {
     for (const child of node.children) {
       const built = await buildNode(child, ctx);
