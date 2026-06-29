@@ -64,6 +64,35 @@ export async function capture(browser: Browser, opts: CaptureOptions): Promise<C
     }
     await page.waitForTimeout(opts.settleMs ?? 1_500);
 
+    // Hide dev-mode overlays so they don't (a) appear in extracted layers or
+    // (b) bleed into element screenshots. nextjs-portal renders the Next.js
+    // dev indicator as a fixed-position web component that overlapped icon
+    // screenshots; cookie banners and chat widgets cause similar problems.
+    await page.addStyleTag({
+      content: `
+        nextjs-portal,
+        [data-nextjs-toast],
+        [data-nextjs-dialog-overlay],
+        #__next-build-watcher,
+        [data-next-mark],
+        [data-next-mark-loading],
+        [data-nextjs-dev-tools-button],
+        [data-nextjs-router-announcer],
+        #__next-route-announcer__,
+        .__next-route-announcer__,
+        .grecaptcha-badge,
+        #cookie-banner,
+        [aria-label="Open Intercom Messenger"],
+        .intercom-launcher,
+        .crisp-client {
+          display: none !important;
+          visibility: hidden !important;
+        }
+      `,
+    });
+    // Tiny settle for the style to apply
+    await page.waitForTimeout(50);
+
     // Run the extractor in the page
     const extractorCall = buildExtractorCall({ rootSelector: 'body', screenshotAttr: SCREENSHOT_ATTR });
     let extractResult: {
