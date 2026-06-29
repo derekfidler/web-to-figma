@@ -42,8 +42,23 @@ export async function applyLibraryTokens(root: SceneNode): Promise<TokenApplyRep
 // ---- colour token matching --------------------------------------------------
 
 type ColourToken =
-  | { kind: 'variable'; variable: Variable; name: string; rgb: { r: number; g: number; b: number } }
-  | { kind: 'paintStyle'; style: PaintStyle; name: string; rgb: { r: number; g: number; b: number } };
+  | {
+      kind: 'variable';
+      variable: Variable;
+      name: string;
+      /** "{collectionName}/{variableName}" — gives the matcher access to the
+       *  hierarchical context, since variables often have terse leaf names
+       *  whose meaning is defined by their collection. */
+      fullPath: string;
+      rgb: { r: number; g: number; b: number };
+    }
+  | {
+      kind: 'paintStyle';
+      style: PaintStyle;
+      name: string;
+      fullPath: string;
+      rgb: { r: number; g: number; b: number };
+    };
 
 async function applyColourTokens(root: SceneNode): Promise<TokenApplyReport['colors']> {
   const { pool, diagnostics } = await collectAllColourTokens();
@@ -155,13 +170,31 @@ async function collectAllColourTokens(): Promise<{
     errors: [],
   };
 
+  // Cache collection name lookups so we resolve each one only once.
+  const collectionCache = new Map<string, string>();
+  async function collectionName(id: string): Promise<string> {
+    if (collectionCache.has(id)) return collectionCache.get(id)!;
+    try {
+      const c = await figma.variables.getVariableCollectionByIdAsync(id);
+      const name = c?.name ?? '';
+      collectionCache.set(id, name);
+      return name;
+    } catch {
+      collectionCache.set(id, '');
+      return '';
+    }
+  }
+
   // Local colour variables
   try {
     const local = await figma.variables.getLocalVariablesAsync('COLOR');
     diagnostics.localVariables = local.length;
     for (const v of local) {
       const rgb = resolveDefaultColour(v);
-      if (rgb) out.push({ kind: 'variable', variable: v, name: v.name, rgb });
+      if (!rgb) continue;
+      const collName = await collectionName(v.variableCollectionId);
+      const fullPath = (collName ? `${collName}/${v.name}` : v.name).toLowerCase();
+      out.push({ kind: 'variable', variable: v, name: v.name, fullPath, rgb });
     }
   } catch (err) {
     diagnostics.errors.push(`getLocalVariablesAsync: ${(err as Error).message}`);
@@ -174,7 +207,7 @@ async function collectAllColourTokens(): Promise<{
     for (const s of styles) {
       const solid = s.paints.find((p) => p.type === 'SOLID') as SolidPaint | undefined;
       if (!solid) continue;
-      out.push({ kind: 'paintStyle', style: s, name: s.name, rgb: solid.color });
+      out.push({ kind: 'paintStyle', style: s, name: s.name, fullPath: s.name.toLowerCase(), rgb: solid.color });
     }
   } catch (err) {
     diagnostics.errors.push(`getLocalPaintStylesAsync: ${(err as Error).message}`);
@@ -199,9 +232,10 @@ async function collectAllColourTokens(): Promise<{
           if (imported.resolvedType !== 'COLOR') continue;
           diagnostics.libraryVariables++;
           const rgb = resolveDefaultColour(imported);
-          if (rgb) out.push({ kind: 'variable', variable: imported, name: imported.name, rgb });
+          if (!rgb) continue;
+          const fullPath = `${collection.name}/${imported.name}`.toLowerCase();
+          out.push({ kind: 'variable', variable: imported, name: imported.name, fullPath, rgb });
         } catch (err) {
-          // Per-variable import failure is expected for non-colour types; don't spam.
           if (diagnostics.errors.length < 3) {
             diagnostics.errors.push(`importVariableByKeyAsync(${libVar.name}): ${(err as Error).message}`);
           }
@@ -269,27 +303,30 @@ function findClosestColour(
 }
 
 function contextScore(token: ColourToken, context: ColourContext): number {
-  const name = token.name.toLowerCase();
+  // fullPath includes the collection name so we get hierarchical context
+  // (e.g. "color semantic/text/primary" vs "shadow/xs/color"). Both
+  // halves of the path inform whether the variable belongs in this slot.
+  const path = token.fullPath;
   let score = 0;
   const positives: Record<ColourContext, string[]> = {
-    text: ['text', 'foreground', 'fg', 'label', 'heading', 'body', 'content'],
-    background: ['background', 'surface', 'bg', 'canvas', 'fill'],
-    border: ['border', 'stroke', 'outline', 'divider', 'separator', 'line'],
+    text: ['text', 'foreground', 'label', 'heading', 'body', 'content'],
+    background: ['background', 'surface', 'bg/', '/bg', 'canvas', 'fill'],
+    border: ['border', 'stroke', 'outline', 'divider', 'separator'],
   };
   const negatives: Record<ColourContext, string[]> = {
-    text: ['background', 'surface', 'bg/', 'shadow', 'border', 'stroke', 'icon'],
-    background: ['text', 'foreground', 'shadow', 'icon', 'border'],
+    text: ['background', 'surface', 'shadow', 'border', 'stroke', 'icon', 'elevation'],
+    background: ['text', 'foreground', 'shadow', 'icon', 'border', 'elevation'],
     border: ['text', 'foreground', 'background', 'surface', 'shadow', 'icon'],
   };
-  for (const p of positives[context]) if (name.includes(p)) score += 4;
-  for (const n of negatives[context]) if (name.includes(n)) score -= 4;
-  // Always demote shadow / effect / overlay tokens — they're rarely the
-  // right answer for a fill.
-  if (/(shadow|overlay|effect|elevation)/.test(name)) score -= 6;
-  // Prefer canonical semantic names ("color/text/primary"-style paths).
-  if (/(^|\/)color(\/|-)/.test(name) || name.startsWith('color-')) score += 2;
-  // Slight preference for shorter names (semantic vs component-prefixed).
-  score -= name.length / 100;
+  for (const p of positives[context]) if (path.includes(p)) score += 4;
+  for (const n of negatives[context]) if (path.includes(n)) score -= 4;
+  // Always demote shadow / effect / overlay tokens.
+  if (/(shadow|overlay|effect|elevation)/.test(path)) score -= 8;
+  // Prefer semantic collections / canonical name shapes.
+  if (path.includes('semantic')) score += 3;
+  if (/(^|\/)color(\/|-)/.test(path) || path.startsWith('color-')) score += 1;
+  // Slight bias toward shorter, more general tokens.
+  score -= path.length / 200;
   return score;
 }
 
