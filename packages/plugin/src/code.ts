@@ -7,6 +7,7 @@
 import type { CaptureResponse } from '@web-to-figma/shared';
 import { buildScene } from './converter';
 import { applyLibraryTokens, type TokenApplyReport } from './token-applier';
+import { ensureLibraryStylesImported, type LibraryImportReport } from './library-importer';
 
 type UIMessage =
   | {
@@ -36,6 +37,7 @@ type PluginMessage =
       fontReport: FontReport[];
       tabularDiagnostic: { tried: string[]; succeeded: string | null } | null;
       tokenReport: TokenApplyReport | null;
+      libraryImport: LibraryImportReport | null;
     }
   | { kind: 'error'; message: string }
   | { kind: 'settings'; endpoint: string; token?: string };
@@ -73,6 +75,17 @@ figma.ui.onmessage = async (msg: UIMessage) => {
         colors: { tried: 0, matched: 0, samples: [] },
         textStyles: { tried: 0, matched: 0, samples: [] },
       };
+
+      // Pre-import the Flatpay library catalogue into this file so the
+      // token-matching pass has a full pool to work with. Runs once per
+      // capture session, not per viewport.
+      post({ kind: 'progress', message: 'Importing library styles…' });
+      let libraryImport: LibraryImportReport = { attempted: 0, imported: 0, failed: 0 };
+      try {
+        libraryImport = await ensureLibraryStylesImported();
+      } catch (err) {
+        console.warn('[w2f] library import failed', err);
+      }
 
       for (let i = 0; i < viewports.length; i++) {
         const viewport = viewports[i];
@@ -147,6 +160,7 @@ figma.ui.onmessage = async (msg: UIMessage) => {
         fontReport: dedupeFontReport(combinedFontReport),
         tabularDiagnostic: firstTabularDiag,
         tokenReport: combinedTokenReport,
+        libraryImport,
       });
     } catch (err) {
       const message = (err as Error).message;

@@ -65,25 +65,29 @@ window.addEventListener('message', (event) => {
       setStatus(msg.message as string);
       break;
     case 'success': {
-      const { nodeCount, renderMs, buildMs, fontReport, tabularDiagnostic, tokenReport } = msg as unknown as {
+      const { nodeCount, renderMs, buildMs, fontReport, tabularDiagnostic, tokenReport, libraryImport } = msg as unknown as {
         nodeCount: number;
         renderMs: number;
         buildMs: number;
         fontReport: Array<{ requested: { family: string; weight: number }; resolved: { family: string; style: string }; fellBack: boolean }>;
         tabularDiagnostic: { tried: string[]; succeeded: string | null } | null;
         tokenReport: { colors: { tried: number; matched: number; samples: string[] }; textStyles: { tried: number; matched: number; samples: string[] } } | null;
+        libraryImport: { attempted: number; imported: number; failed: number } | null;
       };
       const fellBackCount = fontReport.filter((f) => f.fellBack).length;
       const summary = fellBackCount > 0
         ? `${nodeCount} layers — ${fellBackCount}/${fontReport.length} fonts fell back`
         : `${nodeCount} layers — all ${fontReport.length} fonts matched`;
+      const libSummary = libraryImport && libraryImport.attempted > 0
+        ? `Library: ${libraryImport.imported}/${libraryImport.attempted} styles imported.`
+        : '';
       const tokSummary = tokenReport
         ? `Tokens: ${tokenReport.colors.matched}/${tokenReport.colors.tried} colours, ${tokenReport.textStyles.matched}/${tokenReport.textStyles.tried} text styles matched.`
         : '';
       const tabSummary = tabularDiagnostic && !tabularDiagnostic.succeeded
         ? `Tabular API unavailable — text styles with TNUM baked in are the only path.`
         : '';
-      setStatus(`${summary} (${renderMs}ms). ${tokSummary} ${tabSummary}`.trim(), 'success');
+      setStatus(`${summary} (${renderMs}ms). ${libSummary} ${tokSummary} ${tabSummary}`.replace(/\s+/g, ' ').trim(), 'success');
       // Show the per-font detail
       fontReportEl.innerHTML = fontReport
         .map((f) => {

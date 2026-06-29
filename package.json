@@ -10,6 +10,7 @@
     "dev:renderer": "npm --workspace renderer run dev",
     "dev:plugin": "npm --workspace plugin run dev",
     "build:plugin": "npm --workspace plugin run build",
+    "fetch-library-keys": "node bin/fetch-library-keys.mjs",
     "test": "npm --workspace renderer run test --if-present && npm --workspace plugin run test --if-present"
   },
   "engines": {

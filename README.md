@@ -58,6 +58,27 @@ npm --workspace @web-to-figma/renderer run capture -- https://flatpay.com deskto
 # → captures/flatpay-com-desktop-{ts}.json
 ```
 
+## Library token matching
+
+Imports get tokenised against your Flatpay design system in two ways:
+
+- **Text + paint styles** — every key listed in `packages/plugin/src/library-manifest.ts` is pre-imported into the user's file before token matching runs. The manifest is generated from the Web UI Kit and Colours/Themes library files.
+- **Colour variables** — auto-discovered at runtime from any team libraries the user has *enabled* in their file's library panel. (Figma's plugin API can't enable libraries programmatically.)
+
+### Regenerating the style manifest
+
+Whenever the libraries change (new styles added, renamed, etc.), rerun:
+
+```bash
+FIGMA_TOKEN=figd_xxx npm run fetch-library-keys
+```
+
+Generate a Figma personal access token at https://www.figma.com/developers/api#access-tokens. The script hits `/v1/files/:key/styles` for both library files and writes a fresh `library-manifest.ts`. Commit the updated file.
+
+### One-time per-user setup for variables
+
+Each Flatpay teammate needs to **enable the Colours/Themes library** in their Figma file's Library panel once (the toggle next to the library name). Without this, colour variables can't be discovered by the plugin runtime.
+
 ## Auth (when hosted)
 
 Set `W2F_TOKEN=<secret>` on the renderer. Plugin sends `Authorization: Bearer <token>` for every request. Without the env var, the renderer is open (fine for localhost).
