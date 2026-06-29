@@ -357,13 +357,19 @@ export const extractorSource = /* js */ `
     // === Cases where we screenshot the element and return an IMAGE node ===
 
     if (isIconFontElement(el, cs) || isInlineSvg(el) || isMediaElement(el)) {
-      const id = uuid();
-      el.setAttribute(SCREENSHOT_ATTR, id);
+      // Capture the absolute viewport rect now. Server clips a screenshot of
+      // that exact region instead of locating the element by attribute, which
+      // is fragile (React/Vue re-renders strip our data-* attributes).
       return {
         ...baseProps,
         __kind: 'image',
         __needsScreenshot: { reason: isInlineSvg(el) ? 'svg' : isMediaElement(el) ? 'media' : 'icon-font' },
-        __selector: id,
+        __selector: JSON.stringify({
+          x: rect.left,
+          y: rect.top,
+          width: rect.width,
+          height: rect.height,
+        }),
       };
     }
 

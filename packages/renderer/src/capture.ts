@@ -121,18 +121,20 @@ async function collectScreenshots(
   if (node.__needsScreenshot && node.__selector) {
     if (!cache.has(node.__selector)) {
       try {
-        const locator = page.locator(`[${SCREENSHOT_ATTR}="${node.__selector}"]`);
-        const buffer = await locator.screenshot({
-          omitBackground: true,
-          type: 'png',
-          animations: 'disabled',
-          caret: 'hide',
-          timeout: 3_000,
-        });
-        cache.set(node.__selector, { base64: buffer.toString('base64'), mimeType: 'image/png' });
+        const clip = JSON.parse(node.__selector) as { x: number; y: number; width: number; height: number };
+        if (clip.width > 0 && clip.height > 0) {
+          const buffer = await page.screenshot({
+            omitBackground: true,
+            type: 'png',
+            animations: 'disabled',
+            caret: 'hide',
+            clip,
+            timeout: 3_000,
+          });
+          cache.set(node.__selector, { base64: buffer.toString('base64'), mimeType: 'image/png' });
+        }
       } catch (err) {
-        // Skip — node will fall back to a placeholder rect during finalise
-        console.warn(`[capture] screenshot failed for ${node.__selector}:`, (err as Error).message);
+        console.warn(`[capture] screenshot failed for clip ${node.__selector}:`, (err as Error).message);
       }
     }
   }

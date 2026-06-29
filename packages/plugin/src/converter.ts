@@ -23,6 +23,12 @@ const FALLBACK_FONT: FontName = { family: 'Inter', style: 'Regular' };
 
 type FontKey = string; // family|style
 
+type FontResolution = {
+  font: FontName;
+  /** True when we couldn't load the originally-requested family. */
+  fellBack: boolean;
+};
+
 export async function buildScene(
   capture: CaptureResponse,
   options: { onProgress?: (msg: string) => void } = {},
@@ -57,7 +63,7 @@ export async function buildScene(
 // --- font preloading ---------------------------------------------------------
 
 type BuildCtx = {
-  fontMap: Map<FontKey, FontName>;
+  fontMap: Map<FontKey, FontResolution>;
   imageMap: Map<string, string>; // node id → image hash
 };
 
@@ -89,12 +95,12 @@ function collectFontsNeeded(node: W2FNode, into: Set<FontKey>, map: Map<FontKey,
   if (node.type === 'FRAME') for (const c of node.children) collectFontsNeeded(c, into, map);
 }
 
-async function preloadFonts(root: W2FNode): Promise<Map<FontKey, FontName>> {
+async function preloadFonts(root: W2FNode): Promise<Map<FontKey, FontResolution>> {
   const keys = new Set<FontKey>();
   const meta = new Map<FontKey, { family: string; weight: number }>();
   collectFontsNeeded(root, keys, meta);
 
-  const result = new Map<FontKey, FontName>();
+  const result = new Map<FontKey, FontResolution>();
   // Always have a fallback ready.
   try {
     await figma.loadFontAsync(FALLBACK_FONT);
@@ -108,16 +114,17 @@ async function preloadFonts(root: W2FNode): Promise<Map<FontKey, FontName>> {
       const requested: FontName = { family: info.family, style: styleFromWeight(info.weight) };
       try {
         await figma.loadFontAsync(requested);
-        result.set(k, requested);
+        result.set(k, { font: requested, fellBack: false });
+        return;
       } catch {
-        // Try Inter at the same weight
-        const interFallback: FontName = { family: 'Inter', style: styleFromWeight(info.weight) };
-        try {
-          await figma.loadFontAsync(interFallback);
-          result.set(k, interFallback);
-        } catch {
-          result.set(k, FALLBACK_FONT);
-        }
+        // continue to fallback
+      }
+      const interFallback: FontName = { family: 'Inter', style: styleFromWeight(info.weight) };
+      try {
+        await figma.loadFontAsync(interFallback);
+        result.set(k, { font: interFallback, fellBack: true });
+      } catch {
+        result.set(k, { font: FALLBACK_FONT, fellBack: true });
       }
     }),
   );
@@ -200,7 +207,10 @@ function buildFrame(node: W2FFrame, ctx: BuildCtx): Promise<FrameNode> {
   if (node.strokes) applyStrokes(frame, node.strokes);
   if (node.cornerRadius != null) applyCornerRadius(frame, node.cornerRadius);
   if (node.effects) frame.effects = mapEffects(node.effects);
-  if (node.clipsContent) frame.clipsContent = true;
+  // Deliberately not propagating clipsContent — the imported file is for
+  // editing, and clipping inside small frames (buttons, sidebars) hides any
+  // overflowing fallback-font text. Designers can re-enable per frame.
+  frame.clipsContent = false;
   if (node.layout && node.layout.mode !== 'NONE') applyLayout(frame, node.layout);
   return (async () => {
     for (const child of node.children) {
@@ -213,15 +223,25 @@ function buildFrame(node: W2FFrame, ctx: BuildCtx): Promise<FrameNode> {
 
 async function buildText(node: W2FText, ctx: BuildCtx): Promise<TextNode> {
   const text = figma.createText();
-  const font = ctx.fontMap.get(fontKey(node.fontFamily, node.fontWeight)) ?? FALLBACK_FONT;
-  text.fontName = font;
+  const resolution = ctx.fontMap.get(fontKey(node.fontFamily, node.fontWeight)) ?? {
+    font: FALLBACK_FONT,
+    fellBack: true,
+  };
+  text.fontName = resolution.font;
   text.fontSize = Math.max(1, node.fontSize);
   text.characters = node.characters;
   text.name = node.name;
   text.x = node.x;
   text.y = node.y;
-  text.textAutoResize = 'NONE';
-  text.resizeWithoutConstraints(Math.max(1, node.width), Math.max(1, node.height));
+  // When we used a fallback font the captured width is no longer accurate —
+  // let the text node grow to its natural size so it doesn't clip ("Sen" /
+  // "Rec"). For original fonts the captured size is correct and we keep it.
+  if (resolution.fellBack) {
+    text.textAutoResize = 'WIDTH_AND_HEIGHT';
+  } else {
+    text.textAutoResize = 'NONE';
+    text.resizeWithoutConstraints(Math.max(1, node.width), Math.max(1, node.height));
+  }
   if (node.opacity != null) text.opacity = node.opacity;
   if (node.lineHeightPx) text.lineHeight = { unit: 'PIXELS', value: node.lineHeightPx };
   if (node.letterSpacingPx) text.letterSpacing = { unit: 'PIXELS', value: node.letterSpacingPx };

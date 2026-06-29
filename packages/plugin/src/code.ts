@@ -59,7 +59,10 @@ figma.ui.onmessage = async (msg: UIMessage) => {
       const buildMs = Date.now() - buildStart;
 
       figma.viewport.scrollAndZoomIntoView([root]);
-      figma.notify(`Imported ${capture.meta.nodeCount} layers from ${new URL(capture.meta.url).hostname}`);
+      // Figma's plugin sandbox doesn't expose the URL constructor — parse manually.
+      const hostMatch = capture.meta.url.match(/^https?:\/\/([^/]+)/);
+      const host = hostMatch ? hostMatch[1] : capture.meta.url;
+      figma.notify(`Imported ${capture.meta.nodeCount} layers from ${host}`);
 
       post({ kind: 'success', nodeCount: capture.meta.nodeCount, renderMs: capture.meta.renderMs, buildMs });
     } catch (err) {
