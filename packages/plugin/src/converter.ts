@@ -37,7 +37,7 @@ export async function buildScene(
 
   // 1. Pre-load every font we'll need. Falls back per-font on load failure.
   progress('Loading fonts...');
-  const fontMap = await preloadFonts(capture.root);
+  const fontMap = await preloadFonts(capture.root, capture.meta.fontAliases ?? {});
 
   // 2. Decode all base64 images up-front so we can do sync work later.
   progress('Decoding images...');
@@ -95,7 +95,10 @@ function collectFontsNeeded(node: W2FNode, into: Set<FontKey>, map: Map<FontKey,
   if (node.type === 'FRAME') for (const c of node.children) collectFontsNeeded(c, into, map);
 }
 
-async function preloadFonts(root: W2FNode): Promise<Map<FontKey, FontResolution>> {
+async function preloadFonts(
+  root: W2FNode,
+  fontAliases: Record<string, string>,
+): Promise<Map<FontKey, FontResolution>> {
   const keys = new Set<FontKey>();
   const meta = new Map<FontKey, { family: string; weight: number }>();
   collectFontsNeeded(root, keys, meta);
@@ -119,7 +122,14 @@ async function preloadFonts(root: W2FNode): Promise<Map<FontKey, FontResolution>
   await Promise.all(
     [...keys].map(async (k) => {
       const info = meta.get(k)!;
-      const resolved = await resolveFont(info.family, info.weight, stylesByFamily);
+      // Renderer-extracted @font-face alias takes priority over fuzzy matching.
+      const aliased = fontAliases[info.family];
+      const family = aliased ?? info.family;
+      const resolved = await resolveFont(family, info.weight, stylesByFamily);
+      // If the alias matched something, the user shouldn't see it as a fallback.
+      if (aliased && resolved.font.family.toLowerCase().includes(aliased.toLowerCase().split(' ')[0])) {
+        resolved.fellBack = false;
+      }
       result.set(k, resolved);
     }),
   );
@@ -144,6 +154,10 @@ async function resolveFont(
   stylesByFamily: Map<string, string[]>,
 ): Promise<FontResolution> {
   const candidates = familyCandidates(requestedFamily);
+  // Add the fuzzy match (if any) as a final candidate before Inter
+  const fuzzy = fuzzyFindFamily(requestedFamily, stylesByFamily);
+  if (fuzzy && !candidates.includes(fuzzy)) candidates.push(fuzzy);
+
   for (const family of candidates) {
     const styles = stylesByFamily.get(family);
     if (!styles || styles.length === 0) continue;
@@ -166,19 +180,49 @@ async function resolveFont(
   }
 }
 
-/** Generate candidate family names. "Founders Grotesk X-Cond" → also try
- *  "Founders Grotesk X-Condensed", "Founders Grotesk", etc. */
+/** Generate candidate family names. Pages often use CSS-variable aliases
+ *  like "interTight" or "founders" that resolve to a real installed font via
+ *  @font-face. We can't reach those mappings from the plugin sandbox, so we
+ *  produce a stack of variants and rely on fuzzy substring matching against
+ *  the installed-font catalogue as a last resort. */
 function familyCandidates(family: string): string[] {
-  const out = [family];
-  // Common CSS abbreviation expansions
-  const expanded = family
-    .replace(/X-Cond\b/i, 'X-Condensed')
-    .replace(/X-Condensed\b/i, 'X-Condensed');
+  const out: string[] = [family];
+  // Common abbreviation expansions
+  const expanded = family.replace(/X-Cond\b/i, 'X-Condensed');
   if (expanded !== family) out.push(expanded);
-  // Trim trailing weight words to find the base family
+  // Trim trailing weight words: "Founders Grotesk Bold" → "Founders Grotesk"
   const baseTrim = family.replace(/\s+(Thin|Light|Regular|Medium|Semi\s*Bold|Bold|Extra\s*Bold|Black)$/i, '');
   if (baseTrim !== family) out.push(baseTrim);
+  // Strip Next.js / module-CSS prefixes/suffixes: "__Inter_Tight_abc123" → "Inter Tight"
+  const nextFontMatch = family.match(/^_+([A-Za-z]+(?:_[A-Za-z]+)*)_?[a-f0-9]*$/);
+  if (nextFontMatch) out.push(nextFontMatch[1].replace(/_/g, ' '));
+  // CamelCase → spaced: "interTight" → "Inter Tight"
+  const camelSplit = family.replace(/([a-z])([A-Z])/g, '$1 $2');
+  if (camelSplit !== family) {
+    out.push(camelSplit);
+    // Title-case it too
+    out.push(camelSplit.replace(/\b\w/g, (c) => c.toUpperCase()));
+  }
   return [...new Set(out)];
+}
+
+/** Last-resort substring match: scan installed family names for one that
+ *  contains the requested alias (case-insensitive). Catches cases like
+ *  "founders" → "Founders Grotesk X-Condensed". */
+function fuzzyFindFamily(alias: string, stylesByFamily: Map<string, string[]>): string | null {
+  const needle = alias.toLowerCase().replace(/[^a-z]/g, '');
+  if (needle.length < 3) return null;
+  for (const family of stylesByFamily.keys()) {
+    const hay = family.toLowerCase().replace(/[^a-z]/g, '');
+    if (hay.includes(needle) || needle.includes(hay)) return family;
+  }
+  // Try matching individual CamelCase tokens of the alias
+  const tokens = alias.split(/(?=[A-Z])|[\s_-]+/).filter((t) => t.length >= 3);
+  for (const family of stylesByFamily.keys()) {
+    const hay = family.toLowerCase();
+    if (tokens.every((t) => hay.includes(t.toLowerCase()))) return family;
+  }
+  return null;
 }
 
 /** Score each available style against the requested weight, pick the closest. */

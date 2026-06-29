@@ -85,6 +85,7 @@ export async function capture(browser: Browser, opts: CaptureOptions): Promise<C
     if (extractResult.error || !extractResult.tree) {
       throw new Error(`extractor failed: ${extractResult.error || 'no tree'}`);
     }
+    const fontAliases = (extractResult as { fontAliases?: Record<string, string> }).fontAliases ?? {};
 
     // Post-process: screenshots + image fetches
     const screenshotCache = new Map<string, { base64: string; mimeType: string }>();
@@ -102,6 +103,7 @@ export async function capture(browser: Browser, opts: CaptureOptions): Promise<C
       viewport,
       renderMs: Date.now() - started,
       nodeCount: countNodes(root),
+      fontAliases,
     };
 
     return { meta, root };

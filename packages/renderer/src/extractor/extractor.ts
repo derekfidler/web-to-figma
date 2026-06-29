@@ -474,11 +474,51 @@ export const extractorSource = /* js */ `
   // Scroll to top to get consistent bbox
   window.scrollTo(0, 0);
 
+  // Build a font-alias map by reading @font-face rules. Tailwind / Next.js
+  // setups bind CSS aliases like "interTight" or "founders" to actual font
+  // files; getComputedStyle returns only the alias, so without this the
+  // plugin can't find the real font name.
+  const fontAliases = {};
+  for (const sheet of Array.from(document.styleSheets)) {
+    let rules;
+    try { rules = sheet.cssRules || []; } catch (e) { continue; } // CORS
+    for (const rule of Array.from(rules)) {
+      if (rule.type !== 5 /* CSSFontFaceRule */) continue;
+      const family = (rule.style.fontFamily || '').replace(/["']/g, '').trim();
+      const src = rule.style.src || rule.style.getPropertyValue('src') || '';
+      const urlMatch = src.match(/url\\(["']?([^)"']+)["']?\\)/);
+      // Skip "Foo Fallback" pseudo-families used by Next.js for layout shift mitigation
+      if (!family || /\\bFallback\\b/i.test(family) || !urlMatch || fontAliases[family]) continue;
+      const url = decodeURIComponent(urlMatch[1]);
+      const filename = (url.split('/').pop() || '').split('?')[0];
+      let baseName = filename
+        // Strip extension first
+        .replace(/\\.(woff2?|ttf|otf|eot)$/i, '')
+        // Next.js bundler suffixes: -s.p.06gsk5rbwrua-, -s.2e4xesgakionn etc.
+        // The suffix can include further -.,_ chars and a trailing dash.
+        .replace(/[-_]s\\.(?:p\\.)?[a-z0-9_.,-]+$/i, '')
+        // VariableFont decorator with axis tags: _VariableFont_wght, _VariableFont_wdth,wght
+        .replace(/[-_]VariableFont[-_,a-zA-Z]*/g, '')
+        // Italic + weight markers between separators (case-insensitive)
+        .replace(/[-_](?:Italic|Oblique|Thin|ExtraLight|UltraLight|Light|Regular|Medium|SemiBold|Semibold|DemiBold|Bold|ExtraBold|UltraBold|Black|Heavy)(?=[-_]|$)/gi, '')
+        // Collapse remaining separators to spaces
+        .replace(/[-_,.]+/g, ' ')
+        .trim();
+      // Insert spaces between camelCase boundaries: FoundersGroteskX → Founders Grotesk X
+      baseName = baseName
+        .replace(/([a-z])([A-Z])/g, '$1 $2')
+        .replace(/\\s+/g, ' ')
+        .trim();
+      if (baseName) fontAliases[family] = baseName;
+    }
+  }
+
   const tree = walk(root, null);
   return {
     title: document.title,
     url: location.href,
     viewport: { width: window.innerWidth, height: window.innerHeight },
+    fontAliases,
     tree,
   };
 })()

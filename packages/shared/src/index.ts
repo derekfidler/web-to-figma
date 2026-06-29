@@ -38,6 +38,9 @@ export type CaptureMeta = {
   renderMs: number;
   /** Number of nodes in the resulting tree. */
   nodeCount: number;
+  /** CSS-alias → likely-real-font-name from page @font-face declarations.
+   *  e.g. { "interTight": "Inter Tight", "founders": "Founders Grotesk" } */
+  fontAliases?: Record<string, string>;
 };
 
 /** The discriminated union of all node types we emit. Mirrors Figma's mental model. */
