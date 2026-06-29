@@ -47,15 +47,22 @@ export async function capture(browser: Browser, opts: CaptureOptions): Promise<C
   });
 
   const page = await context.newPage();
+  // Freeze CSS animations so element screenshots are stable. Without this,
+  // sites with continuous animations (Stripe, hero parallax, marquees) cause
+  // locator.screenshot() to retry until timeout — minutes instead of seconds.
+  await page.emulateMedia({ reducedMotion: 'reduce' });
 
   try {
-    await page.goto(opts.url, { waitUntil: 'networkidle', timeout: 30_000 });
+    // `domcontentloaded` is more reliable than `networkidle` — sites with
+    // long-polling analytics (Stripe, etc.) never reach networkidle. We then
+    // wait a fixed settle period for late-loading images/fonts.
+    await page.goto(opts.url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    // Best-effort networkidle wait, but don't fail if it times out.
+    await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
     if (opts.waitForSelector) {
       await page.waitForSelector(opts.waitForSelector, { timeout: 10_000 });
     }
-    if (opts.settleMs ?? 500) {
-      await page.waitForTimeout(opts.settleMs ?? 500);
-    }
+    await page.waitForTimeout(opts.settleMs ?? 1_500);
 
     // Run the extractor in the page
     const extractorCall = buildExtractorCall({ rootSelector: 'body', screenshotAttr: SCREENSHOT_ATTR });
@@ -115,7 +122,13 @@ async function collectScreenshots(
     if (!cache.has(node.__selector)) {
       try {
         const locator = page.locator(`[${SCREENSHOT_ATTR}="${node.__selector}"]`);
-        const buffer = await locator.screenshot({ omitBackground: true, type: 'png', timeout: 5_000 });
+        const buffer = await locator.screenshot({
+          omitBackground: true,
+          type: 'png',
+          animations: 'disabled',
+          caret: 'hide',
+          timeout: 3_000,
+        });
         cache.set(node.__selector, { base64: buffer.toString('base64'), mimeType: 'image/png' });
       } catch (err) {
         // Skip — node will fall back to a placeholder rect during finalise
@@ -162,11 +175,18 @@ async function collectImages(
 
 function collectImageUrls(node: IntermediateNode | null, urls: Set<string>): void {
   if (!node) return;
-  if (node.__kind === 'image' && node.src && !node.__needsScreenshot) urls.add(node.src);
+  if (node.__kind === 'image' && node.src && !node.__needsScreenshot && isFetchableUrl(node.src)) {
+    urls.add(node.src);
+  }
   if (node.fills) {
-    for (const f of node.fills) if (f.type === 'IMAGE' && f.src) urls.add(f.src);
+    for (const f of node.fills) if (f.type === 'IMAGE' && f.src && isFetchableUrl(f.src)) urls.add(f.src);
   }
   if (node.children) for (const c of node.children) collectImageUrls(c, urls);
+}
+
+function isFetchableUrl(url: string): boolean {
+  // Skip data URIs (already inline), fragment-only refs, blob URLs, anything not http(s).
+  return /^https?:\/\//i.test(url);
 }
 
 function guessMime(url: string): string {
