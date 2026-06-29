@@ -6,6 +6,7 @@
  */
 import type { CaptureResponse } from '@web-to-figma/shared';
 import { buildScene } from './converter';
+import { applyLibraryTokens, type TokenApplyReport } from './token-applier';
 
 type UIMessage =
   | {
@@ -34,6 +35,7 @@ type PluginMessage =
       buildMs: number;
       fontReport: FontReport[];
       tabularDiagnostic: { tried: string[]; succeeded: string | null } | null;
+      tokenReport: TokenApplyReport | null;
     }
   | { kind: 'error'; message: string }
   | { kind: 'settings'; endpoint: string; token?: string };
@@ -67,6 +69,10 @@ figma.ui.onmessage = async (msg: UIMessage) => {
       let totalBuildMs = 0;
       const combinedFontReport: FontReport[] = [];
       let firstTabularDiag: { tried: string[]; succeeded: string | null } | null = null;
+      const combinedTokenReport: TokenApplyReport = {
+        colors: { tried: 0, matched: 0, samples: [] },
+        textStyles: { tried: 0, matched: 0, samples: [] },
+      };
 
       for (let i = 0; i < viewports.length; i++) {
         const viewport = viewports[i];
@@ -102,6 +108,23 @@ figma.ui.onmessage = async (msg: UIMessage) => {
         // Place each wrapper alongside whatever's already on the page (existing
         // artwork from before, plus the ones we placed earlier in this loop).
         positionAlongsideExisting(root);
+
+        // Token pass — swap raw values for design-system variables / text styles
+        // wherever they match. Solves TNUM as a side-effect for any text whose
+        // style is in the local catalogue.
+        post({ kind: 'progress', message: `[${i + 1}/${viewports.length}] Matching library tokens...` });
+        try {
+          const report = await applyLibraryTokens(root);
+          combinedTokenReport.colors.tried += report.colors.tried;
+          combinedTokenReport.colors.matched += report.colors.matched;
+          for (const s of report.colors.samples) if (combinedTokenReport.colors.samples.length < 6) combinedTokenReport.colors.samples.push(s);
+          combinedTokenReport.textStyles.tried += report.textStyles.tried;
+          combinedTokenReport.textStyles.matched += report.textStyles.matched;
+          for (const s of report.textStyles.samples) if (combinedTokenReport.textStyles.samples.length < 6) combinedTokenReport.textStyles.samples.push(s);
+        } catch (err) {
+          console.warn('[w2f] token application failed', err);
+        }
+
         importedRoots.push(root);
         totalNodes += capture.meta.nodeCount;
         totalRenderMs += capture.meta.renderMs;
@@ -123,6 +146,7 @@ figma.ui.onmessage = async (msg: UIMessage) => {
         buildMs: totalBuildMs,
         fontReport: dedupeFontReport(combinedFontReport),
         tabularDiagnostic: firstTabularDiag,
+        tokenReport: combinedTokenReport,
       });
     } catch (err) {
       const message = (err as Error).message;

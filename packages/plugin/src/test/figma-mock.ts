@@ -86,6 +86,16 @@ const figma = {
     { fontName: { family: 'Inter', style: 'Semi Bold' } },
     { fontName: { family: 'Inter', style: 'Bold' } },
   ],
+  getLocalTextStylesAsync: async () => [],
+  variables: {
+    getLocalVariablesAsync: async (_type?: string) => [],
+    setBoundVariableForPaint: (paint: unknown) => paint,
+    importVariableByKeyAsync: async (_k: string) => ({ resolvedType: 'COLOR', valuesByMode: {} }),
+  },
+  teamLibrary: {
+    getAvailableLibraryVariableCollectionsAsync: async () => [],
+    getVariablesInLibraryCollectionAsync: async (_k: string) => [],
+  },
   viewport: { scrollAndZoomIntoView: (_nodes: unknown[]) => undefined },
   notify: (_msg: string, _opts?: unknown) => undefined,
   clientStorage: {
