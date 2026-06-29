@@ -430,6 +430,26 @@ async function buildText(node: W2FText, ctx: BuildCtx): Promise<TextNode> {
     text.textDecoration = node.textDecoration === 'UNDERLINE' ? 'UNDERLINE' : 'STRIKETHROUGH';
   }
   text.fills = mapFills(node.fills, node.id, ctx);
+
+  // Tabular numbers for all Inter Tight text. Brand convention — keeps
+  // amounts, counts, and timestamps optically aligned across rows.
+  // The Figma plugin typings flag openTypeFeatures as readonly, but the
+  // runtime exposes `setRangeOpenTypeFeatures` on TextNode in current Figma
+  // versions. We call it via an `unknown` cast and swallow any error so the
+  // import still succeeds on older runtimes that don't have the setter.
+  if (/^inter\s*tight\b/i.test(resolution.font.family) && node.characters.length > 0) {
+    type FeatureSetter = {
+      setRangeOpenTypeFeatures?: (start: number, end: number, value: Record<string, boolean>) => void;
+    };
+    const setter = (text as unknown as FeatureSetter).setRangeOpenTypeFeatures;
+    if (typeof setter === 'function') {
+      try {
+        setter.call(text, 0, node.characters.length, { TNUM: true });
+      } catch {
+        // TNUM may not be supported on the loaded font face; safe to skip.
+      }
+    }
+  }
   return text;
 }
 
