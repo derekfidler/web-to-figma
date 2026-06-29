@@ -87,6 +87,7 @@ const figma = {
     { fontName: { family: 'Inter', style: 'Bold' } },
   ],
   getLocalTextStylesAsync: async () => [],
+  getLocalPaintStylesAsync: async () => [],
   variables: {
     getLocalVariablesAsync: async (_type?: string) => [],
     setBoundVariableForPaint: (paint: unknown) => paint,

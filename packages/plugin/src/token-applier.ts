@@ -14,13 +14,6 @@
  * Returns a report the UI can show so the user knows what got tokenised.
  */
 
-type LibraryVariableDescriptor = { key: string; name: string; collectionKey: string };
-
-type ColorVar = {
-  variable: Variable;
-  /** Resolved RGB (0..1). Some variables are aliases — we resolve once. */
-  rgb: { r: number; g: number; b: number };
-};
 
 export type TokenApplyReport = {
   colors: { tried: number; matched: number; samples: string[] };
@@ -28,91 +21,159 @@ export type TokenApplyReport = {
 };
 
 export async function applyLibraryTokens(root: SceneNode): Promise<TokenApplyReport> {
-  const colourReport = await applyColourVariables(root);
+  // Try both colour systems in one combined pool so the closest match wins
+  // regardless of whether the library publishes variables or paint styles.
+  const colourReport = await applyColourTokens(root);
   const textReport = await applyTextStyles(root);
   return { colors: colourReport, textStyles: textReport };
 }
 
-// ---- colour variable matching -----------------------------------------------
+// ---- colour token matching --------------------------------------------------
 
-async function applyColourVariables(root: SceneNode): Promise<TokenApplyReport['colors']> {
-  const colourVars = await collectAllColourVariables();
-  if (colourVars.length === 0) return { tried: 0, matched: 0, samples: [] };
+type ColourToken =
+  | { kind: 'variable'; variable: Variable; name: string; rgb: { r: number; g: number; b: number } }
+  | { kind: 'paintStyle'; style: PaintStyle; name: string; rgb: { r: number; g: number; b: number } };
+
+async function applyColourTokens(root: SceneNode): Promise<TokenApplyReport['colors']> {
+  const pool = await collectAllColourTokens();
+  if (pool.length === 0) return { tried: 0, matched: 0, samples: [] };
 
   let tried = 0;
   let matched = 0;
   const samples: string[] = [];
+  const sampleSet = new Set<string>();
+
+  const promises: Promise<void>[] = [];
 
   walkAll(root, (node) => {
-    const targets: { paints: Paint[]; field: VariableBindablePaintField; setter: (paints: Paint[]) => void }[] = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const n = node as any;
+    // Fills (single-fill SOLID is the common case; we handle that path well.
+    // For multi-fill nodes, fall back to per-paint variable binding.)
     if (Array.isArray(n.fills)) {
-      targets.push({
-        paints: n.fills as Paint[],
-        field: 'color',
-        setter: (paints) => { n.fills = paints; },
-      });
-    }
-    if (Array.isArray(n.strokes)) {
-      targets.push({
-        paints: n.strokes as Paint[],
-        field: 'color',
-        setter: (paints) => { n.strokes = paints; },
-      });
-    }
-    for (const { paints, field, setter } of targets) {
-      let changed = false;
-      const next = paints.map((paint) => {
-        if (paint.type !== 'SOLID') return paint;
-        const match = findClosestColour(paint.color, colourVars);
+      const fills = n.fills as Paint[];
+      const onlySolid = fills.length === 1 && fills[0].type === 'SOLID';
+
+      if (onlySolid) {
+        const paint = fills[0] as SolidPaint;
         tried++;
-        if (!match) return paint;
+        const match = findClosestColour(paint.color, pool);
+        if (match) {
+          matched++;
+          if (!sampleSet.has(match.name) && sampleSet.size < 6) {
+            samples.push(match.name);
+            sampleSet.add(match.name);
+          }
+          if (match.kind === 'paintStyle') {
+            // Apply paint style — single async call replaces fills with the
+            // style's fills. Style binding survives because we don't override
+            // node.fills afterwards.
+            promises.push(
+              (async () => {
+                try {
+                  if ('setFillStyleIdAsync' in n && typeof n.setFillStyleIdAsync === 'function') {
+                    await n.setFillStyleIdAsync(match.style.id);
+                  } else {
+                    n.fillStyleId = match.style.id;
+                  }
+                } catch {/* skip */}
+              })(),
+            );
+          } else {
+            n.fills = [figma.variables.setBoundVariableForPaint(paint, 'color', match.variable)];
+          }
+        }
+      } else {
+        // Multi-fill: bind variables paint-by-paint (paint styles are
+        // node-level so we can't mix per-paint).
+        let changed = false;
+        const next = fills.map((paint) => {
+          if (paint.type !== 'SOLID') return paint;
+          tried++;
+          const match = findClosestColour(paint.color, pool);
+          if (!match || match.kind !== 'variable') return paint;
+          matched++;
+          if (!sampleSet.has(match.name) && sampleSet.size < 6) {
+            samples.push(match.name);
+            sampleSet.add(match.name);
+          }
+          changed = true;
+          return figma.variables.setBoundVariableForPaint(paint, 'color', match.variable);
+        });
+        if (changed) n.fills = next;
+      }
+    }
+
+    if (Array.isArray(n.strokes)) {
+      const strokes = n.strokes as Paint[];
+      let changed = false;
+      const next = strokes.map((paint) => {
+        if (paint.type !== 'SOLID') return paint;
+        tried++;
+        const match = findClosestColour(paint.color, pool);
+        if (!match || match.kind !== 'variable') return paint;
         matched++;
-        if (samples.length < 6) samples.push(match.variable.name);
+        if (!sampleSet.has(match.name) && sampleSet.size < 6) {
+          samples.push(match.name);
+          sampleSet.add(match.name);
+        }
         changed = true;
-        return figma.variables.setBoundVariableForPaint(paint, field, match.variable);
+        return figma.variables.setBoundVariableForPaint(paint, 'color', match.variable);
       });
-      if (changed) setter(next);
+      if (changed) n.strokes = next;
     }
   });
 
+  await Promise.all(promises);
   return { tried, matched, samples };
 }
 
-async function collectAllColourVariables(): Promise<ColorVar[]> {
-  const local = await figma.variables.getLocalVariablesAsync('COLOR');
-  const out: ColorVar[] = [];
-  for (const v of local) {
-    const rgb = resolveDefaultColour(v);
-    if (rgb) out.push({ variable: v, rgb });
-  }
-  // Library collections — must be enabled by the user in the file's library
-  // panel for these to surface. Quietly skip if the API fails.
+async function collectAllColourTokens(): Promise<ColourToken[]> {
+  const out: ColourToken[] = [];
+
+  // Local colour variables
+  try {
+    const local = await figma.variables.getLocalVariablesAsync('COLOR');
+    for (const v of local) {
+      const rgb = resolveDefaultColour(v);
+      if (rgb) out.push({ kind: 'variable', variable: v, name: v.name, rgb });
+    }
+  } catch {/* skip */}
+
+  // Local paint (colour) styles
+  try {
+    const styles = await figma.getLocalPaintStylesAsync();
+    for (const s of styles) {
+      const solid = s.paints.find((p) => p.type === 'SOLID') as SolidPaint | undefined;
+      if (!solid) continue;
+      out.push({ kind: 'paintStyle', style: s, name: s.name, rgb: solid.color });
+    }
+  } catch {/* skip */}
+
+  // Library colour variables (enabled team library collections only)
   try {
     const collections = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
     for (const collection of collections) {
-      let libVars: LibraryVariableDescriptor[] = [];
+      let libVars: { key: string; name: string; resolvedType?: string }[] = [];
       try {
-        libVars = (await figma.teamLibrary.getVariablesInLibraryCollectionAsync(collection.key)) as unknown as LibraryVariableDescriptor[];
+        libVars = (await figma.teamLibrary.getVariablesInLibraryCollectionAsync(collection.key)) as unknown as typeof libVars;
       } catch {
         continue;
       }
       for (const libVar of libVars) {
-        // We don't know the type from the descriptor; importing tells us.
+        if (libVar.resolvedType && libVar.resolvedType !== 'COLOR') continue;
         try {
           const imported = await figma.variables.importVariableByKeyAsync(libVar.key);
           if (imported.resolvedType !== 'COLOR') continue;
           const rgb = resolveDefaultColour(imported);
-          if (rgb) out.push({ variable: imported, rgb });
+          if (rgb) out.push({ kind: 'variable', variable: imported, name: imported.name, rgb });
         } catch {
-          // skip — likely a non-colour or inaccessible variable
+          /* not accessible */
         }
       }
     }
-  } catch {
-    // teamLibrary may be unavailable in some plugin contexts
-  }
+  } catch {/* skip */}
+
   return out;
 }
 
@@ -129,22 +190,22 @@ function resolveDefaultColour(v: Variable): { r: number; g: number; b: number } 
   return null;
 }
 
-/** Find the closest colour variable within a small perceptual distance.
+/** Find the closest colour token within a small perceptual distance.
  *  Returns null if nothing is close enough. */
 function findClosestColour(
   target: { r: number; g: number; b: number },
-  vars: ColorVar[],
-): ColorVar | null {
-  let best: ColorVar | null = null;
+  pool: ColourToken[],
+): ColourToken | null {
+  let best: ColourToken | null = null;
   let bestDist = Infinity;
-  for (const v of vars) {
-    const dr = (v.rgb.r - target.r) * 255;
-    const dg = (v.rgb.g - target.g) * 255;
-    const db = (v.rgb.b - target.b) * 255;
+  for (const t of pool) {
+    const dr = (t.rgb.r - target.r) * 255;
+    const dg = (t.rgb.g - target.g) * 255;
+    const db = (t.rgb.b - target.b) * 255;
     const dist = Math.sqrt(dr * dr + dg * dg + db * db);
     if (dist < bestDist) {
       bestDist = dist;
-      best = v;
+      best = t;
     }
   }
   // Threshold ~6 in RGB Euclidean. Tight enough to avoid mis-matches, loose
