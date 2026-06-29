@@ -64,6 +64,11 @@ figma.ui.onmessage = async (msg: UIMessage) => {
       });
       const buildMs = Date.now() - buildStart;
 
+      // Place the new import 200px to the right of the rightmost existing
+      // top-level frame on this page, so successive captures lay out
+      // side-by-side instead of stacking on top of each other.
+      positionAlongsideExisting(root);
+
       figma.viewport.scrollAndZoomIntoView([root]);
       // Figma's plugin sandbox doesn't expose the URL constructor — parse manually.
       const hostMatch = capture.meta.url.match(/^https?:\/\/([^/]+)/);
@@ -87,4 +92,25 @@ figma.ui.onmessage = async (msg: UIMessage) => {
 
 function post(msg: PluginMessage): void {
   figma.ui.postMessage(msg);
+}
+
+const IMPORT_GAP = 200;
+
+/** Place `newFrame` 200px right of the rightmost existing frame on the page.
+ *  If there are no other frames, leave it at the origin. */
+function positionAlongsideExisting(newFrame: FrameNode): void {
+  let rightmost: number | null = null;
+  for (const child of figma.currentPage.children) {
+    if (child.id === newFrame.id) continue;
+    if (!('width' in child)) continue;
+    const right = child.x + child.width;
+    if (rightmost === null || right > rightmost) rightmost = right;
+  }
+  if (rightmost === null) {
+    newFrame.x = 0;
+    newFrame.y = 0;
+  } else {
+    newFrame.x = rightmost + IMPORT_GAP;
+    newFrame.y = 0;
+  }
 }
