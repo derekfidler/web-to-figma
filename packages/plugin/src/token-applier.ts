@@ -89,9 +89,9 @@ async function applyColourTokens(root: SceneNode): Promise<TokenApplyReport['col
         const match = findClosestColour(paint.color, pool, fillContext);
         if (match) {
           matched++;
-          if (!sampleSet.has(match.name) && sampleSet.size < 6) {
-            samples.push(match.name);
-            sampleSet.add(match.name);
+          if (!sampleSet.has(match.fullPath) && sampleSet.size < 6) {
+            samples.push(match.fullPath);
+            sampleSet.add(match.fullPath);
           }
           if (match.kind === 'paintStyle') {
             // Apply paint style — single async call replaces fills with the
@@ -122,9 +122,9 @@ async function applyColourTokens(root: SceneNode): Promise<TokenApplyReport['col
           const match = findClosestColour(paint.color, pool, fillContext);
           if (!match || match.kind !== 'variable') return paint;
           matched++;
-          if (!sampleSet.has(match.name) && sampleSet.size < 6) {
-            samples.push(match.name);
-            sampleSet.add(match.name);
+          if (!sampleSet.has(match.fullPath) && sampleSet.size < 6) {
+            samples.push(match.fullPath);
+            sampleSet.add(match.fullPath);
           }
           changed = true;
           return figma.variables.setBoundVariableForPaint(paint, 'color', match.variable);
@@ -276,7 +276,7 @@ function findClosestColour(
   context: ColourContext,
 ): ColourToken | null {
   const TIGHT_DIST = 8; // any name qualifies within this radius
-  const WIDE_DIST = 70; // ~near-black-vs-pure-black gap
+  const WIDE_DIST = 90; // for context-strong matches (semantic library or text/etc.)
   const STRONG_CONTEXT = 4; // a single positive keyword (+4) earns the wider window
 
   const candidates: { token: ColourToken; dist: number; ctx: number }[] = [];
@@ -302,12 +302,31 @@ function findClosestColour(
   return candidates[0].token;
 }
 
+/** Collections whose variables always win when in conflict. These are the
+ *  Flatpay design-system surfaces — Colours & Themes / Color Semantic etc.
+ *  Same idea as the brand-font overrides: cheaper than perfect heuristics. */
+const PREFERRED_COLLECTIONS = [
+  'colours & themes',
+  'color semantic',
+  'color components',
+  'color primitives',
+];
+
 function contextScore(token: ColourToken, context: ColourContext): number {
   // fullPath includes the collection name so we get hierarchical context
-  // (e.g. "color semantic/text/primary" vs "shadow/xs/color"). Both
-  // halves of the path inform whether the variable belongs in this slot.
+  // (e.g. "color semantic/color/text/primary" vs "web ui kit/xs/color").
   const path = token.fullPath;
   let score = 0;
+
+  // Heavy preference for Flatpay's semantic colour libraries — this single
+  // signal dominates everything else.
+  for (const pref of PREFERRED_COLLECTIONS) {
+    if (path.startsWith(pref + '/') || path.includes('/' + pref + '/')) {
+      score += 20;
+      break;
+    }
+  }
+
   const positives: Record<ColourContext, string[]> = {
     text: ['text', 'foreground', 'label', 'heading', 'body', 'content'],
     background: ['background', 'surface', 'bg/', '/bg', 'canvas', 'fill'],
@@ -320,10 +339,10 @@ function contextScore(token: ColourToken, context: ColourContext): number {
   };
   for (const p of positives[context]) if (path.includes(p)) score += 4;
   for (const n of negatives[context]) if (path.includes(n)) score -= 4;
+
   // Always demote shadow / effect / overlay tokens.
   if (/(shadow|overlay|effect|elevation)/.test(path)) score -= 8;
-  // Prefer semantic collections / canonical name shapes.
-  if (path.includes('semantic')) score += 3;
+  // Canonical naming bonus.
   if (/(^|\/)color(\/|-)/.test(path) || path.startsWith('color-')) score += 1;
   // Slight bias toward shorter, more general tokens.
   score -= path.length / 200;

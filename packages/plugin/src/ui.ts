@@ -92,6 +92,9 @@ window.addEventListener('message', (event) => {
       const tokSummary = tokenReport
         ? `Tokens: ${tokenReport.colors.matched}/${tokenReport.colors.tried} colours, ${tokenReport.textStyles.matched}/${tokenReport.textStyles.tried} text styles matched.`
         : '';
+      const colourSamples = tokenReport && tokenReport.colors.samples.length > 0
+        ? `Colour picks: ${tokenReport.colors.samples.join(' | ')}.`
+        : '';
       // If we found zero colour tokens at all, surface the diagnostic so we
       // can tell whether the library is enabled, whether the API failed, etc.
       const colourDiagText = tokenReport && tokenReport.colors.tried === 0
@@ -110,7 +113,7 @@ window.addEventListener('message', (event) => {
       const tabSummary = tabularDiagnostic && !tabularDiagnostic.succeeded
         ? `Tabular API unavailable — text styles with TNUM baked in are the only path.`
         : '';
-      setStatus(`${summary} (${renderMs}ms). ${libSummary} ${tokSummary} ${colourDiagText} ${tabSummary}`.replace(/\s+/g, ' ').trim(), 'success');
+      setStatus(`${summary} (${renderMs}ms). ${libSummary} ${tokSummary} ${colourSamples} ${colourDiagText} ${tabSummary}`.replace(/\s+/g, ' ').trim(), 'success');
       // Show the per-font detail
       fontReportEl.innerHTML = fontReport
         .map((f) => {
