@@ -10,55 +10,80 @@
     --border: #e0e0e0;
     --accent: #18a0fb;
     --error: #d93025;
+    --pill-hover: #f6f6f6;
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #2c2c2c; --fg: #ffffff; --muted: #9a9a9a; --border: #444; }
+    :root { --bg: #2c2c2c; --fg: #ffffff; --muted: #9a9a9a; --border: #444; --pill-hover: #3a3a3a; }
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); font-family: 'Inter', system-ui, sans-serif; font-size: 12px; }
   body { padding: 16px; }
-  label { display: block; font-weight: 600; margin: 12px 0 4px; }
-  input, select { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; }
+  label.field-label { display: block; font-weight: 600; margin: 12px 0 6px; }
+  input[type="text"], input[type="password"], select { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; }
   input:focus, select:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
-  .row { display: flex; gap: 8px; }
-  .row > * { flex: 1; }
-  button { width: 100%; padding: 10px; margin-top: 16px; background: var(--fg); color: var(--bg); border: 0; border-radius: 6px; font: inherit; font-weight: 600; cursor: pointer; }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.primary { width: 100%; padding: 10px; margin-top: 16px; background: var(--fg); color: var(--bg); border: 0; border-radius: 6px; font: inherit; font-weight: 600; cursor: pointer; }
+  button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
   .settings { margin-top: 16px; padding: 12px; border: 1px solid var(--border); border-radius: 6px; }
   .settings summary { cursor: pointer; font-weight: 600; color: var(--muted); }
   .settings[open] summary { margin-bottom: 8px; }
   .status { margin-top: 12px; padding: 10px 12px; border-radius: 6px; background: var(--border); font-size: 11px; min-height: 1em; }
   .status.error { background: rgba(217, 48, 37, 0.1); color: var(--error); }
   .status.success { background: rgba(24, 160, 251, 0.1); color: var(--accent); }
+
+  /* Viewport pills */
+  .viewport-list { display: flex; flex-direction: column; gap: 6px; }
+  .vp { display: flex; align-items: center; padding: 9px 12px; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; user-select: none; transition: background 80ms, border-color 80ms, color 80ms; }
+  .vp:hover { background: var(--pill-hover); border-color: var(--muted); }
+  .vp input { display: none; }
+  .vp .vp-check { width: 14px; height: 14px; margin-right: 10px; border: 1.5px solid var(--muted); border-radius: 3px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: background 80ms, border-color 80ms; }
+  .vp .vp-check svg { opacity: 0; transition: opacity 80ms; }
+  .vp .vp-name { flex: 1; font-weight: 500; }
+  .vp .vp-dims { font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .vp:has(input:checked) { background: var(--fg); border-color: var(--fg); color: var(--bg); }
+  .vp:has(input:checked) .vp-check { background: var(--bg); border-color: var(--bg); }
+  .vp:has(input:checked) .vp-check svg { opacity: 1; }
+  .vp:has(input:checked) .vp-dims { color: var(--bg); opacity: 0.55; }
 </style>
 </head>
 <body>
-  <label for="url">URL</label>
+  <label class="field-label" for="url">URL</label>
   <input id="url" type="text" placeholder="https://flatpay.com" autofocus />
 
-  <label>Viewports</label>
-  <div id="viewports" style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;">
-    <label style="display: flex; align-items: center; gap: 8px; font-weight: 400; margin: 0; cursor: pointer;">
-      <input type="checkbox" name="viewport" value="extra-wide" /> Extra wide (2550 × 1200)
+  <label class="field-label">Viewports</label>
+  <div class="viewport-list" id="viewports">
+    <label class="vp">
+      <input type="checkbox" name="viewport" value="extra-wide" />
+      <span class="vp-check"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2.5 6.5L4.8 8.5L9.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+      <span class="vp-name">Extra wide</span>
+      <span class="vp-dims">2550 × 1200</span>
     </label>
-    <label style="display: flex; align-items: center; gap: 8px; font-weight: 400; margin: 0; cursor: pointer;">
-      <input type="checkbox" name="viewport" value="desktop" checked /> Desktop (1440 × 900)
+    <label class="vp">
+      <input type="checkbox" name="viewport" value="desktop" checked />
+      <span class="vp-check"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2.5 6.5L4.8 8.5L9.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+      <span class="vp-name">Desktop</span>
+      <span class="vp-dims">1440 × 900</span>
     </label>
-    <label style="display: flex; align-items: center; gap: 8px; font-weight: 400; margin: 0; cursor: pointer;">
-      <input type="checkbox" name="viewport" value="tablet" /> Tablet (768 × 1024)
+    <label class="vp">
+      <input type="checkbox" name="viewport" value="tablet" />
+      <span class="vp-check"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2.5 6.5L4.8 8.5L9.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+      <span class="vp-name">Tablet</span>
+      <span class="vp-dims">768 × 1024</span>
     </label>
-    <label style="display: flex; align-items: center; gap: 8px; font-weight: 400; margin: 0; cursor: pointer;">
-      <input type="checkbox" name="viewport" value="mobile" /> Mobile (375 × 812)
+    <label class="vp">
+      <input type="checkbox" name="viewport" value="mobile" />
+      <span class="vp-check"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2.5 6.5L4.8 8.5L9.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+      <span class="vp-name">Mobile</span>
+      <span class="vp-dims">375 × 812</span>
     </label>
   </div>
 
-  <button id="capture">Capture page</button>
+  <button id="capture" class="primary">Capture page</button>
 
   <details class="settings">
     <summary>Renderer settings</summary>
-    <label for="endpoint">Endpoint</label>
+    <label class="field-label" for="endpoint">Endpoint</label>
     <input id="endpoint" type="text" />
-    <label for="token">Token (optional)</label>
+    <label class="field-label" for="token">Token (optional)</label>
     <input id="token" type="password" placeholder="Bearer token" />
   </details>
 
