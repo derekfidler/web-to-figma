@@ -1,0 +1,18 @@
+{
+  "name": "web-to-figma",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Convert any webpage into editable Figma layers. Hosted Playwright renderer + Figma plugin.",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:renderer": "npm --workspace renderer run dev",
+    "dev:plugin": "npm --workspace plugin run dev",
+    "build:plugin": "npm --workspace plugin run build",
+    "test": "npm --workspace renderer run test --if-present && npm --workspace plugin run test --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
