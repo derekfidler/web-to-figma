@@ -36,12 +36,21 @@
   <label for="url">URL</label>
   <input id="url" type="text" placeholder="https://flatpay.com" autofocus />
 
-  <label for="viewport">Viewport</label>
-  <select id="viewport">
-    <option value="desktop" selected>Desktop (1440 × 900)</option>
-    <option value="tablet">Tablet (768 × 1024)</option>
-    <option value="mobile">Mobile (375 × 812)</option>
-  </select>
+  <label>Viewports</label>
+  <div id="viewports" style="display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;">
+    <label style="display: flex; align-items: center; gap: 8px; font-weight: 400; margin: 0; cursor: pointer;">
+      <input type="checkbox" name="viewport" value="extra-wide" /> Extra wide (2550 × 1200)
+    </label>
+    <label style="display: flex; align-items: center; gap: 8px; font-weight: 400; margin: 0; cursor: pointer;">
+      <input type="checkbox" name="viewport" value="desktop" checked /> Desktop (1440 × 900)
+    </label>
+    <label style="display: flex; align-items: center; gap: 8px; font-weight: 400; margin: 0; cursor: pointer;">
+      <input type="checkbox" name="viewport" value="tablet" /> Tablet (768 × 1024)
+    </label>
+    <label style="display: flex; align-items: center; gap: 8px; font-weight: 400; margin: 0; cursor: pointer;">
+      <input type="checkbox" name="viewport" value="mobile" /> Mobile (375 × 812)
+    </label>
+  </div>
 
   <button id="capture">Capture page</button>
 

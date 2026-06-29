@@ -10,10 +10,20 @@ export type Viewport = {
   isMobile?: boolean;
 };
 
-export const VIEWPORT_PRESETS: Record<'desktop' | 'tablet' | 'mobile', Viewport> = {
+export type ViewportPresetName = 'extra-wide' | 'desktop' | 'tablet' | 'mobile';
+
+export const VIEWPORT_PRESETS: Record<ViewportPresetName, Viewport> = {
+  'extra-wide': { width: 2550, height: 1200, deviceScaleFactor: 1 },
   desktop: { width: 1440, height: 900, deviceScaleFactor: 1 },
   tablet: { width: 768, height: 1024, deviceScaleFactor: 2 },
   mobile: { width: 375, height: 812, deviceScaleFactor: 2, isMobile: true },
+};
+
+export const VIEWPORT_LABELS: Record<ViewportPresetName, string> = {
+  'extra-wide': 'Extra wide (2550 × 1200)',
+  desktop: 'Desktop (1440 × 900)',
+  tablet: 'Tablet (768 × 1024)',
+  mobile: 'Mobile (375 × 812)',
 };
 
 export type CaptureRequest = {

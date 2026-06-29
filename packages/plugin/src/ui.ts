@@ -4,7 +4,9 @@
  */
 
 const urlInput = document.getElementById('url') as HTMLInputElement;
-const viewportSelect = document.getElementById('viewport') as HTMLSelectElement;
+const viewportCheckboxes = Array.from(
+  document.querySelectorAll('input[name="viewport"]'),
+) as HTMLInputElement[];
 const endpointInput = document.getElementById('endpoint') as HTMLInputElement;
 const tokenInput = document.getElementById('token') as HTMLInputElement;
 const captureButton = document.getElementById('capture') as HTMLButtonElement;
@@ -32,15 +34,20 @@ captureButton.addEventListener('click', () => {
     setStatus('Enter a URL', 'error');
     return;
   }
+  const viewports = viewportCheckboxes.filter((c) => c.checked).map((c) => c.value);
+  if (viewports.length === 0) {
+    setStatus('Pick at least one viewport', 'error');
+    return;
+  }
   setBusy(true);
-  setStatus('Sending request...');
+  setStatus(`Capturing ${viewports.length} viewport${viewports.length > 1 ? 's' : ''}...`);
   parent.postMessage(
     {
       pluginMessage: {
         kind: 'capture',
         payload: {
           url,
-          viewport: viewportSelect.value,
+          viewports,
           endpoint: endpointInput.value.trim() || 'http://localhost:4321',
           token: tokenInput.value.trim() || undefined,
         },
