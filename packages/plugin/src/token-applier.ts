@@ -77,6 +77,15 @@ async function applyColourTokens(root: SceneNode): Promise<TokenApplyReport['col
     // Fill context depends on the node — text-node fills are text colours,
     // everything else is a background/surface fill.
     const fillContext: ColourContext = node.type === 'TEXT' ? 'text' : 'background';
+    // For text nodes, also infer whether it's a primary or secondary text
+    // role from the font weight/size so the matcher can prefer the matching
+    // semantic family.
+    const textRole: TextRole = node.type === 'TEXT'
+      ? inferTextRole(
+          typeof (node as TextNode).fontSize === 'number' ? ((node as TextNode).fontSize as number) : 14,
+          (node as TextNode).fontWeight !== figma.mixed ? Number((node as TextNode).fontWeight) : 400,
+        )
+      : 'primary';
     // Fills (single-fill SOLID is the common case; we handle that path well.
     // For multi-fill nodes, fall back to per-paint variable binding.)
     if (Array.isArray(n.fills)) {
@@ -86,7 +95,7 @@ async function applyColourTokens(root: SceneNode): Promise<TokenApplyReport['col
       if (onlySolid) {
         const paint = fills[0] as SolidPaint;
         tried++;
-        const match = findClosestColour(paint.color, pool, fillContext);
+        const match = findClosestColour(paint.color, pool, fillContext, textRole);
         if (match) {
           matched++;
           if (!sampleSet.has(match.fullPath) && sampleSet.size < 6) {
@@ -119,7 +128,7 @@ async function applyColourTokens(root: SceneNode): Promise<TokenApplyReport['col
         const next = fills.map((paint) => {
           if (paint.type !== 'SOLID') return paint;
           tried++;
-          const match = findClosestColour(paint.color, pool, fillContext);
+          const match = findClosestColour(paint.color, pool, fillContext, textRole);
           if (!match || match.kind !== 'variable') return paint;
           matched++;
           if (!sampleSet.has(match.fullPath) && sampleSet.size < 6) {
@@ -309,6 +318,20 @@ async function resolveDefaultColour(
 
 type ColourContext = 'text' | 'background' | 'border';
 
+/** Sub-context for text fills. Lets the matcher prefer secondary/muted
+ *  semantic tokens for visually-secondary text (small or lighter weight)
+ *  even when the rendered RGB is closer to text/primary than text/secondary. */
+type TextRole = 'primary' | 'secondary';
+
+function inferTextRole(fontSize: number, fontWeight: number): TextRole {
+  // Heading / strong-weight / large text → primary
+  if (fontWeight >= 600) return 'primary';
+  if (fontSize >= 18) return 'primary';
+  // Small or light-weight body → likely secondary / muted
+  if (fontWeight <= 500 && fontSize <= 14) return 'secondary';
+  return 'primary';
+}
+
 /** Find the closest colour token, balancing colour distance against name
  *  context. CSS-rendered colours often differ slightly from the design
  *  system's canonical value (e.g. body text `color: black` (#000) vs
@@ -319,6 +342,7 @@ function findClosestColour(
   target: { r: number; g: number; b: number },
   pool: ColourToken[],
   context: ColourContext,
+  textRole: TextRole = 'primary',
 ): ColourToken | null {
   const TIGHT_DIST = 8; // any name qualifies within this radius
   const WIDE_DIST = 90; // for context-strong matches (semantic library or text/etc.)
@@ -330,7 +354,7 @@ function findClosestColour(
     const dg = (t.rgb.g - target.g) * 255;
     const db = (t.rgb.b - target.b) * 255;
     const dist = Math.sqrt(dr * dr + dg * dg + db * db);
-    const ctx = contextScore(t, context);
+    const ctx = contextScore(t, context) + roleBonus(t, context, textRole);
     const eligible = dist <= TIGHT_DIST || (dist <= WIDE_DIST && ctx >= STRONG_CONTEXT);
     if (eligible) candidates.push({ token: t, dist, ctx });
   }
@@ -365,6 +389,26 @@ const COLLECTION_PRIORITY: { match: string; score: number }[] = [
  *  Style imports from the manifest are unaffected — this only filters the
  *  colour-variable pool. */
 const EXCLUDED_COLOUR_LIBRARIES = ['web ui kit'];
+
+/** Extra bonus / penalty based on which text role the slot is. Push for
+ *  secondary/muted/tertiary tokens when the text node looks like body /
+ *  secondary content; push for primary/heading tokens otherwise. Strong
+ *  enough (±10) to flip a marginal RGB advantage when the heuristic is
+ *  confident. */
+function roleBonus(token: ColourToken, context: ColourContext, role: TextRole): number {
+  if (context !== 'text') return 0;
+  const path = token.fullPath;
+  const isSecondaryFamily = /(secondary|tertiary|muted|placeholder|subtle|disabled)/.test(path);
+  const isPrimaryFamily = /(primary|heading|emphasis|prominent)(?!\w)/.test(path) && !isSecondaryFamily;
+  if (role === 'secondary') {
+    if (isSecondaryFamily) return 10;
+    if (isPrimaryFamily) return -6;
+  } else {
+    if (isPrimaryFamily) return 4;
+    if (isSecondaryFamily) return -6;
+  }
+  return 0;
+}
 
 function contextScore(token: ColourToken, context: ColourContext): number {
   // fullPath includes the collection name so we get hierarchical context
