@@ -384,6 +384,34 @@ export const extractorSource = /* js */ `
       };
     }
 
+    // === <input> / <textarea> with placeholder ===
+    // Browsers render placeholder text from the attribute, not from the DOM
+    // tree. Treat such inputs as a text leaf using the placeholder so the
+    // import isn't visibly missing UI affordances.
+    if ((el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && !(el.value || '').trim()) {
+      const placeholder = el.getAttribute('placeholder');
+      if (placeholder && placeholder.trim().length > 0) {
+        const textAlignMap = { left: 'LEFT', center: 'CENTER', right: 'RIGHT', justify: 'JUSTIFIED', start: 'LEFT', end: 'RIGHT' };
+        // Placeholders typically render in the muted "placeholder" pseudo-color.
+        let placeholderColor = null;
+        try {
+          const phStyle = getComputedStyle(el, '::placeholder');
+          placeholderColor = parseColor(phStyle.color);
+        } catch (e) { /* ::placeholder not always queryable */ }
+        if (!placeholderColor) placeholderColor = parseColor(cs.color);
+        return {
+          ...baseProps,
+          __kind: 'text',
+          characters: placeholder,
+          fontFamily: (cs.fontFamily || 'Inter').split(',')[0].replace(/["']/g, '').trim(),
+          fontWeight: parseInt(cs.fontWeight) || 400,
+          fontSize: parseFloat(cs.fontSize) || 16,
+          textAlign: textAlignMap[cs.textAlign] || 'LEFT',
+          fills: [{ type: 'SOLID', color: placeholderColor || { r: 0.5, g: 0.5, b: 0.5, a: 1 } }],
+        };
+      }
+    }
+
     // === Pure text leaf ===
     if (isPureTextLeaf(el)) {
       const characters = (el.textContent || '').trim();

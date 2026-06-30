@@ -256,12 +256,19 @@ async function resolveDefaultColour(
   v: Variable,
   depth = 0,
 ): Promise<{ r: number; g: number; b: number } | null> {
-  // A variable has one value per mode. We don't know which mode the user is
-  // viewing — take the first one with a resolvable RGB. Semantic tokens
-  // are usually aliases that point at primitives, so we follow VARIABLE_ALIAS
-  // values until we hit a concrete colour. Bounded depth to avoid cycles.
+  // Resolve in the collection's default mode (typically "Light"). Without
+  // this, multi-mode variables (Light/Dark, theme variants) return whichever
+  // mode happens to be first in valuesByMode, which often gives the wrong
+  // RGB and ends up matching text-secondary to text-primary (or worse).
   if (depth > 6) return null;
-  for (const modeId of Object.keys(v.valuesByMode)) {
+  const collection = await figma.variables.getVariableCollectionByIdAsync(v.variableCollectionId).catch(() => null);
+  const defaultMode = collection?.defaultModeId;
+  // Try default mode first, then fall back to whatever's available.
+  const modeIds = defaultMode
+    ? [defaultMode, ...Object.keys(v.valuesByMode).filter((m) => m !== defaultMode)]
+    : Object.keys(v.valuesByMode);
+
+  for (const modeId of modeIds) {
     const value = v.valuesByMode[modeId];
     if (!value || typeof value !== 'object') continue;
     if ('r' in value && 'g' in value && 'b' in value) {
@@ -358,7 +365,7 @@ function contextScore(token: ColourToken, context: ColourContext): number {
 
   const positives: Record<ColourContext, string[]> = {
     text: ['text', 'foreground', 'label', 'heading', 'body', 'content'],
-    background: ['background', 'surface', 'bg/', '/bg', 'canvas', 'fill'],
+    background: ['background', 'surface', 'bg/', '/bg', 'canvas', 'fill', 'button'],
     border: ['border', 'stroke', 'outline', 'divider', 'separator'],
   };
   const negatives: Record<ColourContext, string[]> = {
