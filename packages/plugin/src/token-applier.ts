@@ -190,7 +190,7 @@ async function collectAllColourTokens(): Promise<{
     const local = await figma.variables.getLocalVariablesAsync('COLOR');
     diagnostics.localVariables = local.length;
     for (const v of local) {
-      const rgb = resolveDefaultColour(v);
+      const rgb = await resolveDefaultColour(v);
       if (!rgb) continue;
       const collName = await collectionName(v.variableCollectionId);
       const fullPath = (collName ? `${collName}/${v.name}` : v.name).toLowerCase();
@@ -213,11 +213,14 @@ async function collectAllColourTokens(): Promise<{
     diagnostics.errors.push(`getLocalPaintStylesAsync: ${(err as Error).message}`);
   }
 
-  // Library colour variables (enabled team library collections only)
+  // Library colour variables (enabled team library collections only).
+  // Excluded libraries (Web UI Kit shadow/spacing variables) are skipped.
   try {
     const collections = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
     diagnostics.libraryCollections = collections.length;
     for (const collection of collections) {
+      const lib = (collection.libraryName ?? '').toLowerCase();
+      if (EXCLUDED_COLOUR_LIBRARIES.some((ex) => lib.includes(ex))) continue;
       let libVars: { key: string; name: string; resolvedType?: string }[] = [];
       try {
         libVars = (await figma.teamLibrary.getVariablesInLibraryCollectionAsync(collection.key)) as unknown as typeof libVars;
@@ -231,7 +234,7 @@ async function collectAllColourTokens(): Promise<{
           const imported = await figma.variables.importVariableByKeyAsync(libVar.key);
           if (imported.resolvedType !== 'COLOR') continue;
           diagnostics.libraryVariables++;
-          const rgb = resolveDefaultColour(imported);
+          const rgb = await resolveDefaultColour(imported);
           if (!rgb) continue;
           const fullPath = `${collection.name}/${imported.name}`.toLowerCase();
           out.push({ kind: 'variable', variable: imported, name: imported.name, fullPath, rgb });
@@ -249,14 +252,33 @@ async function collectAllColourTokens(): Promise<{
   return { pool: out, diagnostics };
 }
 
-function resolveDefaultColour(v: Variable): { r: number; g: number; b: number } | null {
+async function resolveDefaultColour(
+  v: Variable,
+  depth = 0,
+): Promise<{ r: number; g: number; b: number } | null> {
   // A variable has one value per mode. We don't know which mode the user is
-  // viewing — just take the first non-alias value as a representative.
+  // viewing — take the first one with a resolvable RGB. Semantic tokens
+  // are usually aliases that point at primitives, so we follow VARIABLE_ALIAS
+  // values until we hit a concrete colour. Bounded depth to avoid cycles.
+  if (depth > 6) return null;
   for (const modeId of Object.keys(v.valuesByMode)) {
     const value = v.valuesByMode[modeId];
-    if (value && typeof value === 'object' && 'r' in value && 'g' in value && 'b' in value) {
+    if (!value || typeof value !== 'object') continue;
+    if ('r' in value && 'g' in value && 'b' in value) {
       const c = value as { r: number; g: number; b: number };
       return { r: c.r, g: c.g, b: c.b };
+    }
+    if ((value as { type?: string }).type === 'VARIABLE_ALIAS') {
+      const aliasId = (value as { id: string }).id;
+      try {
+        const aliased = await figma.variables.getVariableByIdAsync(aliasId);
+        if (aliased) {
+          const resolved = await resolveDefaultColour(aliased, depth + 1);
+          if (resolved) return resolved;
+        }
+      } catch {
+        /* alias points to a variable we can't access; skip */
+      }
     }
   }
   return null;
@@ -311,6 +333,13 @@ const PREFERRED_COLLECTIONS = [
   'color components',
   'color primitives',
 ];
+
+/** Library names whose colour variables we never want to match against.
+ *  Web UI Kit publishes shadow/spacing tokens that share RGB with text and
+ *  background tokens but aren't the right semantic answer for fills.
+ *  Style imports from the manifest are unaffected — this only filters the
+ *  colour-variable pool. */
+const EXCLUDED_COLOUR_LIBRARIES = ['web ui kit'];
 
 function contextScore(token: ColourToken, context: ColourContext): number {
   // fullPath includes the collection name so we get hierarchical context
