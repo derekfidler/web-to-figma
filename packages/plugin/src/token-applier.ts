@@ -347,14 +347,16 @@ function findClosestColour(
   return candidates[0].token;
 }
 
-/** Collections whose variables always win when in conflict. These are the
- *  Flatpay design-system surfaces — Colours & Themes / Color Semantic etc.
- *  Same idea as the brand-font overrides: cheaper than perfect heuristics. */
-const PREFERRED_COLLECTIONS = [
-  'colours & themes',
-  'color semantic',
-  'color components',
-  'color primitives',
+/** Tiered collection priority. Semantic tokens are the canonical surface
+ *  for generic UI colours; component tokens (button/badge/etc.) are
+ *  intentional overrides and should only win when no semantic match is
+ *  close enough. Same idea as font overrides: cheaper than perfect
+ *  heuristics. */
+const COLLECTION_PRIORITY: { match: string; score: number }[] = [
+  { match: 'color semantic', score: 22 },
+  { match: 'colours & themes', score: 20 },
+  { match: 'color primitives', score: 16 },
+  { match: 'color components', score: 10 },
 ];
 
 /** Library names whose colour variables we never want to match against.
@@ -370,11 +372,12 @@ function contextScore(token: ColourToken, context: ColourContext): number {
   const path = token.fullPath;
   let score = 0;
 
-  // Heavy preference for Flatpay's semantic colour libraries — this single
-  // signal dominates everything else.
-  for (const pref of PREFERRED_COLLECTIONS) {
-    if (path.startsWith(pref + '/') || path.includes('/' + pref + '/')) {
-      score += 20;
+  // Tiered preference: Color Semantic (highest) > Colours & Themes >
+  // primitives > components. Semantic always beats component for the same
+  // RGB so page backgrounds bind to surface/* rather than button/* etc.
+  for (const tier of COLLECTION_PRIORITY) {
+    if (path.startsWith(tier.match + '/') || path.includes('/' + tier.match + '/')) {
+      score += tier.score;
       break;
     }
   }
