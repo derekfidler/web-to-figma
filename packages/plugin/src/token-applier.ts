@@ -381,7 +381,7 @@ function contextScore(token: ColourToken, context: ColourContext): number {
 
   const positives: Record<ColourContext, string[]> = {
     text: ['text', 'foreground', 'label', 'heading', 'body', 'content'],
-    background: ['background', 'surface', 'bg/', '/bg', 'canvas', 'fill', 'button'],
+    background: ['background', 'surface', 'bg/', '/bg', 'canvas', 'fill'],
     border: ['border', 'stroke', 'outline', 'divider', 'separator'],
   };
   const negatives: Record<ColourContext, string[]> = {
@@ -394,6 +394,11 @@ function contextScore(token: ColourToken, context: ColourContext): number {
 
   // Always demote shadow / effect / overlay tokens.
   if (/(shadow|overlay|effect|elevation)/.test(path)) score -= 8;
+  // Demote component-specific tokens (button/badge/input/card etc.) so they
+  // only win when no generic surface/text/border token is close enough.
+  // Component tokens are intentional design overrides; we'd rather bind to
+  // semantic primitives and let designers swap to component tokens by hand.
+  if (/(^|\/)(button|badge|input|card|chip|tab|menu|tooltip|alert|toast)(\/|$)/.test(path)) score -= 5;
   // Canonical naming bonus.
   if (/(^|\/)color(\/|-)/.test(path) || path.startsWith('color-')) score += 1;
   // Slight bias toward shorter, more general tokens.
