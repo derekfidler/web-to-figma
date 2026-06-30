@@ -268,8 +268,15 @@ async function resolveDefaultColour(
   // collection's defaultModeId; finally fall back to whatever's available.
   const modes = collection?.modes ?? [];
   const preferredId = modes.find((m) => {
-    const n = (m.name ?? '').toLowerCase();
-    return PREFERRED_MODE_NAMES.some((p) => n === p || n.startsWith(p + ' ') || n.endsWith(' ' + p));
+    // Tokenise the mode name so "LightMode" / "light mode" / "Light_Theme"
+    // all reduce to ["light", "mode"|"theme"]. Avoids matching "Lightning".
+    const tokens = (m.name ?? '')
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .toLowerCase()
+      .replace(/[^a-z]+/g, ' ')
+      .split(' ')
+      .filter(Boolean);
+    return PREFERRED_MODE_NAMES.some((p) => tokens.includes(p));
   })?.modeId;
   const orderedIds = [
     preferredId,
