@@ -252,23 +252,32 @@ async function collectAllColourTokens(): Promise<{
   return { pool: out, diagnostics };
 }
 
+/** Mode names we prefer when a collection has several. Captured CSS comes
+ *  from a page rendered in the page's "live" theme — typically light. If we
+ *  pick the wrong mode (Dark, Brand-A, etc.) the resolved RGBs lead the
+ *  matcher to wildly wrong tokens (white bg → pink token from a brand mode). */
+const PREFERRED_MODE_NAMES = ['light', 'default', 'day', 'standard', 'base'];
+
 async function resolveDefaultColour(
   v: Variable,
   depth = 0,
 ): Promise<{ r: number; g: number; b: number } | null> {
-  // Resolve in the collection's default mode (typically "Light"). Without
-  // this, multi-mode variables (Light/Dark, theme variants) return whichever
-  // mode happens to be first in valuesByMode, which often gives the wrong
-  // RGB and ends up matching text-secondary to text-primary (or worse).
   if (depth > 6) return null;
   const collection = await figma.variables.getVariableCollectionByIdAsync(v.variableCollectionId).catch(() => null);
-  const defaultMode = collection?.defaultModeId;
-  // Try default mode first, then fall back to whatever's available.
-  const modeIds = defaultMode
-    ? [defaultMode, ...Object.keys(v.valuesByMode).filter((m) => m !== defaultMode)]
-    : Object.keys(v.valuesByMode);
+  // Pick a mode whose name matches our preference list; fall back to the
+  // collection's defaultModeId; finally fall back to whatever's available.
+  const modes = collection?.modes ?? [];
+  const preferredId = modes.find((m) => {
+    const n = (m.name ?? '').toLowerCase();
+    return PREFERRED_MODE_NAMES.some((p) => n === p || n.startsWith(p + ' ') || n.endsWith(' ' + p));
+  })?.modeId;
+  const orderedIds = [
+    preferredId,
+    collection?.defaultModeId,
+    ...Object.keys(v.valuesByMode),
+  ].filter((id, i, arr) => id && arr.indexOf(id) === i) as string[];
 
-  for (const modeId of modeIds) {
+  for (const modeId of orderedIds) {
     const value = v.valuesByMode[modeId];
     if (!value || typeof value !== 'object') continue;
     if ('r' in value && 'g' in value && 'b' in value) {
